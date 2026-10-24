@@ -82,10 +82,11 @@ class TestParse(unittest.TestCase):
     def test_a_short_read_is_not_the_patch(self):
         self.assertIsNone(ap.parse(b"\x00" * 16))
 
-    def test_species_are_live_indices(self):
-        # Treecko is live index 252 (master 277): the gap past Celebi is what the conversion is for.
-        block = ap.parse(_block(caught=((5, 1, 0), (5, 252, 0), (5, 0, 0))))
-        self.assertEqual({1, 252}, ap.caught_dex(block))
+    def test_species_are_master_indices(self):
+        # Read live: shadow #1 snagged as Torkoal logged species 321, and the party record beside it holds the same
+        # 321 at `getPokemonDataId`. Read as the compacted index it would be Snorunt.
+        block = ap.parse(_block(caught=((11, 321, 1), (6, 323, 84), (10, 206, 83), (5, 0, 0))))
+        self.assertEqual({324, 339, 206}, ap.caught_dex(block))   # Torkoal, Barboach, Dunsparce
 
 
 class TestTheBattleTable(unittest.TestCase):

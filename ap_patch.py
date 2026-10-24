@@ -66,7 +66,7 @@ def feature_flags(*, item_checks: bool, pokemon_checks: bool, purify_checks: boo
 @dataclass(frozen=True)
 class CaughtPokemon:
     level: int
-    species: int          # the game's live species index, not a dex number -- see `national_dex`
+    species: int          # the game's MASTER species index (`getPokemonDataId`), not a dex number
     shadow_index: int     # 0 for a wild catch
 
 
@@ -127,11 +127,11 @@ def write_death_link(pending: bool) -> None:
 
 def caught_dex(block: ApPatchBlock) -> "set[int]":
     """National Dex numbers of everything the patch saw captured. An unknown species index is skipped."""
-    from .tools.xd_species_index import national_dex_for_live_species
+    from .tools.xd_species_index import national_dex_for
 
     out: "set[int]" = set()
     for entry in block.caught:
-        dex = national_dex_for_live_species(entry.species) if entry.species else None
+        dex = national_dex_for(entry.species) if entry.species else None
         if dex is not None:
             out.add(dex)
     return out
