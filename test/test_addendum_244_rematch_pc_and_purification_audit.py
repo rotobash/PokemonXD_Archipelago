@@ -192,23 +192,6 @@ class TestThePurificationGateIsActuallyWired(unittest.TestCase):
         self.assertIn("ram_client.read_shadow_monitor(ctx.block_base)", body)
         self.assertNotIn("purification_tracker", source)
 
-    def test_the_three_diagnostic_counters_are_printed(self) -> None:
-        """ADDENDUM 236b caught the write-up claiming these were printed when they were not. Each one is a
-        CLAIM about live behaviour, and a counter nobody can read falsifies nothing."""
-        import inspect
-        source = inspect.getsource(rc.PurificationCountTracker.describe)
-        for counter in ("mismatched_recap_pairings", "party_changes_seen", "battle_polls_skipped"):
-            self.assertIn(counter, source)
-
-    def test_only_the_measured_flag_value_fires(self) -> None:
-        self.assertEqual(rc.PURIFIED_FLAG_VALUE, 64)
-
-    def test_the_battle_gate_has_a_ceiling(self) -> None:
-        """`has_unresolved_battle()` has a documented history of sticking True. A suppression that never ends
-        is the same class of failure as blocking delivery."""
-        self.assertGreater(rc.NamedPurificationTracker.MAX_CONSECUTIVE_BATTLE_SKIPS, 0)
-        self.assertLessEqual(rc.NamedPurificationTracker.MAX_CONSECUTIVE_BATTLE_SKIPS, 2000)
-
 
 if __name__ == "__main__":
     unittest.main()

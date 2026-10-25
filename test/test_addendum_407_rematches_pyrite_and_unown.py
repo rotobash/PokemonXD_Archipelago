@@ -1,8 +1,8 @@
 """ADDENDUM 407 (2026-10-03) -- mandatory rematches can hold items, Pyrite is one level tier, the Unown PID watch.
 
 Mandatory rematches can hold progression/useful items. Pyrite visits 1 and 2 share one level-scaling tier rather
-than being separated. And an Unown L turned into an Unown D upon purification; the code and fields are checked for
-how that happened.
+than being separated. (The Unown PID watch went with the heuristic purification tracker -- purifications come from
+the AP patch's log by Shadow id now.)
 """
 from __future__ import annotations
 
@@ -89,63 +89,6 @@ class TestPyriteIsOneTier(unittest.TestCase):
         pyrite = {levels[i] for i, region in regions.items()
                   if region in ("Pyrite Town", "Pyrite Town (ONBS)") and i in levels}
         self.assertEqual(1, len(pyrite), pyrite)
-
-
-def _record(shadow_id: int, pid: int, purified: bool, dex: int = rc.UNOWN_DEX) -> "rc.ShadowRecord":
-    return rc.ShadowRecord(source="party", slot=0, dex=dex, shadow_id=shadow_id,
-                           purified_flag=rc.PURIFIED_FLAG_VALUE if purified else 0, level=30,
-                           trainer_id=0x12345678, pid=pid, cur_hp=50, max_hp=60)
-
-
-class TestUnownLetters(unittest.TestCase):
-    def test_the_generation_three_formula(self) -> None:
-        self.assertEqual("A", rc.unown_letter(0x00000000))
-        self.assertEqual("B", rc.unown_letter(0x00000001))
-        self.assertEqual("E", rc.unown_letter(0x00000100))
-        self.assertEqual("L", rc.unown_letter(0x00000203))      # 2<<2 | 3 = 11
-        self.assertEqual("D", rc.unown_letter(0x00000003))
-        self.assertEqual("N", rc.unown_letter(0x01000101))      # 64+4+1 = 69, % 28 = 13
-        self.assertEqual("?", rc.unown_letter(0x00010203))      # 16+8+3 = 27
-
-    def test_every_value_maps_into_the_28_forms(self) -> None:
-        letters = {rc.unown_letter(p) for p in range(0, 1 << 16, 7)} | {rc.unown_letter(p << 16) for p in range(256)}
-        self.assertTrue(letters <= set(rc.UNOWN_LETTERS))
-
-
-class TestThePidWatch(unittest.TestCase):
-    def setUp(self) -> None:
-        self.tracker = rc.PurificationCountTracker()
-
-    def _scan(self, *records):
-        self.tracker.observe_records(list(records))
-        return list(self.tracker.new_pid_changes)
-
-    def test_a_pid_kept_through_purification_says_nothing(self) -> None:
-        self._scan(_record(7, 0x00000203, purified=False))
-        self.assertEqual([], self._scan(_record(7, 0x00000203, purified=True)))
-
-    def test_a_changed_pid_is_reported_once_with_the_letters(self) -> None:
-        self._scan(_record(7, 0x00000203, purified=False))
-        lines = self._scan(_record(7, 0x00000003, purified=True))
-        self.assertEqual(1, len(lines))
-        self.assertIn("Unown L -> D", lines[0])
-        self.assertEqual([], self._scan(_record(7, 0x00000003, purified=True)), "reported once")
-        self.assertTrue(any("CHANGED at purification" in line for line in self.tracker.describe()))
-
-    def test_it_never_changes_the_count(self) -> None:
-        self._scan(_record(7, 0x00000203, purified=False))
-        before = self.tracker.total_purified
-        self._scan(_record(7, 0x00000003, purified=True))
-        self._scan(_record(7, 0x00000003, purified=True))
-        self.assertEqual(before + 1, self.tracker.total_purified, "the purification still counts, exactly once")
-
-    def test_it_survives_a_reconnect(self) -> None:
-        self._scan(_record(7, 0x00000203, purified=False))
-        restored = rc.PurificationCountTracker()
-        restored.load_json(self.tracker.to_json())
-        self.assertEqual({7: 0x00000203}, restored.snag_pids)
-        restored.observe_records([_record(7, 0x00000003, purified=True)])
-        self.assertTrue(restored.new_pid_changes)
 
 
 if __name__ == "__main__":

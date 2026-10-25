@@ -7,12 +7,8 @@ tests pin the chain:
   1. `shadow_expansion` draws every new species with `rng.sample` from a pool that already excludes the 83
      vanilla shadow species -- so no generated shadow ever shares a species with another shadow, new or old.
   2. All 83 vanilla shadow species are themselves distinct.
-  3. `NamedPurificationTracker` is keyed by SPECIES and has no shadow whitelist of any kind -- it fires for
-     any party member whose recap purified flag goes 0 -> nonzero.
-
-(1) and (2) matter because of (3): a species-keyed tracker fires once per species, so two shadows sharing a
-species would count as one purification. Nothing in this game produces that, and these tests are what keep it
-that way.
+  3. Purification checks are "Purify - {species}", one per species, so two Shadows sharing a species would be one
+     check. Nothing in this game produces that, and these tests are what keep it that way.
 
 Also here: a drift fix. `ram_client.CHEST_LOCATION_COUNT` still said 115 after ADDENDUM 134 dropped
 locations.py's to 91.
@@ -31,10 +27,6 @@ from ..game_data.real_shadow_data import vanilla_shadow_species
 from ..randomizer import shadow_expansion
 
 _SHADOW_LIST = pathlib.Path(__file__).resolve().parent.parent / "data" / "shadow_pokemon_list.json"
-BLOCK_BASE = 0x80479380
-STREAK = rc.NamedPurificationTracker._CONFIRM_STREAK
-
-
 class TestMirroredConstantsDoNotDrift(unittest.TestCase):
     """ram_client.py duplicates these rather than importing locations.py (which needs the real Archipelago
     package to load). Duplication is fine; silent drift is not."""
@@ -60,9 +52,6 @@ class TestMirroredConstantsDoNotDrift(unittest.TestCase):
         # 94: chest 113 is a non-item box sharing 108's flag (chest_regions.NON_ITEM_CHESTS), not a location.
         self.assertEqual(rc.CHEST_LOCATION_COUNT, 94)
         self.assertEqual(locations.CHEST_COVERED_CHEST_COUNT, 94)
-
-    def test_purification_count_matches_locations(self) -> None:
-        self.assertEqual(rc.PURIFICATION_LOCATION_COUNT, locations.PURIFICATION_LOCATION_COUNT)
 
     def test_the_client_can_never_name_a_location_the_seed_does_not_have(self) -> None:
         for name in rc.CHEST_LOCATION_NAMES:
@@ -121,99 +110,5 @@ class TestSpeciesUniqueness(unittest.TestCase):
 # ============================================================================================================
 # The tracker itself, driven with a synthetic party
 # ============================================================================================================
-class _Member:
-    def __init__(self, party_index: int, species: int) -> None:
-        self.party_index = party_index
-        self.species = species
-        self.reliable_species = species
-        # ADDENDUM 236: the pairing check reads the member's own name, and a real PartyMember always has one.
-        # Matches _Recap's name so this fake stays a self-consistent pairing, which is what it has always meant.
-        self.name = "MON"
-
-
-class _Recap:
-    def __init__(self, purified_flag: int) -> None:
-        self.purified_flag = purified_flag
-        self.name = "MON"
-
-
-class _Party:
-    """Patches the two reads NamedPurificationTracker.poll makes."""
-
-    def __init__(self, flags_by_species: "dict[int, int]") -> None:
-        self.flags_by_species = flags_by_species
-
-    def __enter__(self):
-        self._members = rc.read_party_members
-        self._correlate = rc.correlate_party_with_recap
-        order = list(self.flags_by_species)
-        rc.read_party_members = lambda *a, **k: [
-            _Member(i, species) for i, species in enumerate(order)
-        ]
-        rc.correlate_party_with_recap = lambda *a, **k: {
-            i: (_Recap(self.flags_by_species[species]), "name_matches")
-            for i, species in enumerate(order)
-        }
-        # ADDENDUM 478: the count is made off the slot's own record, by its Shadow id (the species number here).
-        self._record = rc._read_shadow_record
-        rc._read_shadow_record = lambda _address, source, index: rc.ShadowRecord(
-            source, index, order[index], order[index], self.flags_by_species[order[index]], 30, 1, order[index],
-            20, 40)
-        return self
-
-    def __exit__(self, *exc):
-        rc.read_party_members = self._members
-        rc.correlate_party_with_recap = self._correlate
-        rc._read_shadow_record = self._record
-
-
-def _run(tracker, flags, polls=1):
-    fired = []
-    with _Party(flags):
-        for _ in range(polls):
-            fired += tracker.poll(BLOCK_BASE)
-    return fired
-
-
-class TestAnyPurifiedSpeciesCounts(unittest.TestCase):
-    """The decisive property: the tracker has no notion of "is this one of the 83". A generated shadow is an
-    ordinary party member with a purified flag, and that is all it needs to be."""
-
-    # Deliberately a species that is NOT in the vanilla shadow roster.
-    GENERATED = 448   # out of the Gen III dex range on purpose -- the tracker must not care
-
-    def test_a_species_the_vanilla_roster_never_had_still_fires(self) -> None:
-        counter = rc.PurificationCountTracker()
-        _run(counter, {self.GENERATED: 0})
-        fired = _run(counter, {self.GENERATED: 64}, polls=STREAK)
-        self.assertEqual(fired, ["Purify 1 Shadow Pokemon"])
-
-    def test_generated_and_vanilla_shadows_share_one_counter(self) -> None:
-        """The cumulative thresholds are "purify N Shadow Pokemon", not "N of the original 83"."""
-        counter = rc.PurificationCountTracker()
-        _run(counter, {self.GENERATED: 0, 216: 0})         # 216 = Teddiursa, a real vanilla shadow
-        fired = _run(counter, {self.GENERATED: 64, 216: 0}, polls=STREAK)
-        self.assertEqual(fired, ["Purify 1 Shadow Pokemon"])
-        fired = _run(counter, {self.GENERATED: 64, 216: 64}, polls=STREAK)
-        self.assertEqual(fired, ["Purify 2 Shadow Pokemon"])
-        self.assertEqual(counter.total_purified, 2)
-
-    def test_there_is_no_shadow_whitelist_anywhere_in_the_path(self) -> None:
-        """Stated as a test because it is the reason this works, and it would be easy to 'tidy up' by adding
-        one. Any species at all must be able to reach the counter."""
-        for species in (1, 151, 386, 448, 9999):
-            counter = rc.PurificationCountTracker()
-            _run(counter, {species: 0})
-            self.assertEqual(
-                _run(counter, {species: 64}, polls=STREAK), ["Purify 1 Shadow Pokemon"], species
-            )
-
-    def test_the_counter_still_stops_at_the_last_real_threshold(self) -> None:
-        counter = rc.PurificationCountTracker()
-        counter.total_purified = rc.PURIFICATION_LOCATION_COUNT
-        _run(counter, {self.GENERATED: 0})
-        self.assertEqual(_run(counter, {self.GENERATED: 64}, polls=STREAK), [])
-
-
 if __name__ == "__main__":
     unittest.main()

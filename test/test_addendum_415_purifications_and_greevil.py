@@ -43,9 +43,6 @@ class TestTheTable(unittest.TestCase):
         self.assertEqual(1900 + 215, L.LOCATION_TABLE["Purify - Teddiursa"].id_offset)
         self.assertEqual(2285, L.LOCATION_TABLE["Purify - Deoxys"].id_offset)
 
-    def test_the_client_agrees(self) -> None:
-        self.assertEqual(L.PURIFICATION_LOCATION_COUNT, rc.PURIFICATION_LOCATION_COUNT)
-
     def test_the_option_sits_above_the_cap(self) -> None:
         names = list(O.PokemonXDOptions.type_hints)
         self.assertEqual(names.index("purification_checks") + 1, names.index("purification_progression_cap"))

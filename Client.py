@@ -2,7 +2,7 @@
 Pokemon XD: Gale of Darkness -- Archipelago client.
 
 Built on ram_client.py (Dolphin memory access: hooking, block-base resolution, Bag pocket read/write,
-party/species detection, purification detection) and shadow_species.py.
+party/species detection) and ap_patch.py (the AP patch's memory block).
 
 Detected live with no ISO patch: "Catch - {species}" (386), "Purify - {species}" (one per Shadow species),
 "Defeat - {trainer}" (66), "Defeat N Trainers" (232), and the seed's Goal. Catches read the save-resident
@@ -1350,13 +1350,6 @@ class PokemonXDContext(CommonContext):
 
         # Per-seed Shadow Pokemon species map from slot_data; only `/shadowdex` reads it.
         self.shadow_species_map: list[dict[str, Any]] = []
-        # The dex numbers this seed makes Shadow Pokemon, for the purification scan's second rule ("a Shadow
-        # species owned as an ordinary Pokemon has been purified"). Vanilla ones come from `shadow_species_map`
-        # when species were shuffled, and the static table when they were not.
-        self.generated_shadow_dex: "set[int]" = set()
-        # This seed's Poke Spot species. Empty for an older seed -- the seed that needs the Eevee guard below.
-        self.pokespot_dex: "set[int]" = set()
-        self.starter_line_dex: "set[int]" = set()   # ADDENDUM 443
         self.starter_dex: int = STARTER_DEX_DEFAULT
         # Ids a detector named that this seed does not contain. Reported once each, then held.
         self._locations_not_in_seed: "set[int]" = set()
@@ -1712,12 +1705,6 @@ class PokemonXDContext(CommonContext):
 
             # Used only by the `/shadowdex` spoiler command.
             self.shadow_species_map = list(slot_data.get("shadow_species_map") or [])
-            self.generated_shadow_dex = {int(d) for d in (slot_data.get("generated_shadow_dex") or [])}
-            self.pokespot_dex = {
-                int(entry["new_dex"]) for entry in (slot_data.get("pokespot_species_map") or [])
-                if entry.get("new_dex") is not None
-            }
-            self.starter_line_dex = {int(d) for d in (slot_data.get("starter_line_dex") or [])}   # ADDENDUM 443
             # Missable Trainer Shadows: the Shadows on missable fights, handed to Miror B. at each fight's area cap.
             self.missable_shadow_pusher = ram_client.MissableShadowPusher(
                 (list(slot_data.get("missable_shadow_hosts") or []) if slot_data.get("missable_trainer_shadows")
@@ -1904,30 +1891,6 @@ class PokemonXDContext(CommonContext):
             return
         for name, text in rows:
             logger.info(f"{name}: {text}")
-
-    def seed_shadow_dex(self) -> "set[int]":
-        """Every species that is a Shadow Pokemon in THIS seed. The per-seed map wins when present, because
-        `randomize_shadow_species` has moved the species since the static table was written; the static table
-        answers for a seed with that option off. Generated Shadows are additive either way."""
-        from . import shadow_species
-
-        out: "set[int]" = set(self.generated_shadow_dex)
-        if self.shadow_species_map:
-            out |= {int(entry["new_dex"]) for entry in self.shadow_species_map
-                    if entry.get("new_dex") is not None}
-        else:
-            out |= set(shadow_species.SHADOW_CAPTURE_LOCATION_TO_DEX.values())
-        return out
-
-    def obtainable_without_purifying(self) -> "set[int]":
-        """Species this seed gives WITHOUT a purification, so rule 2 of the purification scan does not read
-        owning one as evidence: the guaranteed Eevee (dex 133) and its five evolutions, since nothing stops the
-        expansion making one a generated Shadow and then the story gift alone satisfies rule 2; and this seed's
-        Poke Spot species, which generation now forbids overlapping but an older seed can still contain."""
-        from . import species as species_module
-
-        return ({133} | set(species_module.EEVEELUTION_DEX_NUMBERS) | set(self.pokespot_dex)
-                | set(self.starter_line_dex))   # ADDENDUM 443: a randomized starter's line too
 
     def print_shadow_species_map(self, filter_text: str = "") -> None:
         if not self.shadow_species_map:

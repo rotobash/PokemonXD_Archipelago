@@ -20,7 +20,6 @@ import collections
 import random
 import unittest
 
-from .. import ram_client as rc
 from ..game_data import real_shadow_data as rsd, real_trainer_data as rtd
 from ..game_data.real_moveset_data import load_level_up_moves
 from ..randomizer import shadow_expansion
@@ -125,15 +124,6 @@ class TestThereAreEnoughDistinctSpeciesForTheLadder(unittest.TestCase):
         # ADDENDUM 415: the ladder is one rung per Shadow now, so the floor is "at least as many species as
         # vanilla rungs" -- every vanilla Shadow a distinct species.
         self.assertGreaterEqual(len(set(rsd.vanilla_shadow_species())), 83)
-
-
-class TestTheTrackerRecordsWhyItCanKeyOnSpecies(unittest.TestCase):
-    def test_the_reasoning_is_written_down_next_to_the_code_that_depends_on_it(self):
-        import inspect
-
-        source = inspect.getsource(rc.PurificationCountTracker)
-        self.assertIn("ADDENDUM 225", source)
-        self.assertIn("distinct species", source)
 
 
 if __name__ == "__main__":

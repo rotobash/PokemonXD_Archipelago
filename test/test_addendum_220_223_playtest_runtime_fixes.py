@@ -9,84 +9,9 @@
 """
 import random
 import unittest
-from unittest import mock
 
 from .. import ram_client as rc
 from ..game_data import shadow_move_slots as sms
-
-
-class TestPurificationsAreCountedOncePerSpecies(unittest.TestCase):
-    class _Fake:
-        def __init__(self, queue):
-            self.queue = list(queue)
-            self.last = None
-
-        def poll(self, *args, **kwargs):
-            batch = self.queue.pop(0) if self.queue else []
-            if batch:
-                self.last = batch[-1][0]
-            return batch
-
-    def tracker(self, queue):
-        """ADDENDUM 478: a flip counts only off the slot's purified Shadow record, by its id. The fake hands back
-        that record for the species it just flipped -- one Pokemon per species, its id the species number."""
-        t = rc.PurificationCountTracker()
-        fake = self._Fake(queue)
-        t.tracker = fake
-        patch = mock.patch.object(rc, "_read_shadow_record", side_effect=lambda *a: rc.ShadowRecord(
-            "party", 0, fake.last, fake.last, rc.PURIFIED_FLAG_VALUE, 30, 1, fake.last, 20, 40))
-        patch.start()
-        self.addCleanup(patch.stop)
-        return t
-
-    def test_the_same_species_is_never_counted_twice(self):
-        """The same Totodile must not be scanned twice."""
-        t = self.tracker([[(158, 0)], [(158, 0)], [(158, 0)]])
-        first = t.poll(0)
-        self.assertEqual(len(first), 1)
-        self.assertEqual(t.poll(0), [])
-        self.assertEqual(t.poll(0), [])
-        self.assertEqual(t.total_purified, 1)
-        self.assertEqual(t.duplicate_species_rejected, 2)
-
-    def test_different_species_each_advance_the_count(self):
-        t = self.tracker([[(158, 0)], [(7, 1)], [(1, 2)]])
-        names = [t.poll(0) for _ in range(3)]
-        self.assertEqual([len(n) for n in names], [1, 1, 1])
-        self.assertEqual(t.total_purified, 3)
-        self.assertEqual(t.duplicate_species_rejected, 0)
-
-    def test_the_checks_are_still_the_cumulative_ladder(self):
-        """The checks just increment the count -- the species is the identity, the count is the reward."""
-        t = self.tracker([[(158, 0)], [(7, 1)]])
-        self.assertEqual(t.poll(0), [rc.purification_location_name(1)])
-        self.assertEqual(t.poll(0), [rc.purification_location_name(2)])
-
-    def test_a_species_seen_past_the_cap_is_still_recorded(self):
-        """Otherwise it could be counted later if the cap ever moved, which is the same duplicate by a
-        slower route."""
-        t = self.tracker([[(900 + i, 0)] for i in range(rc.PURIFICATION_LOCATION_COUNT + 2)])
-        for _ in range(rc.PURIFICATION_LOCATION_COUNT + 2):
-            t.poll(0)
-        self.assertEqual(t.total_purified, rc.PURIFICATION_LOCATION_COUNT)
-        self.assertEqual(len(t.purified_species), rc.PURIFICATION_LOCATION_COUNT + 2)
-
-    def test_the_ledger_round_trips_through_json(self):
-        """It has to outlive a client restart, or a species purified in an earlier session looks brand new to
-        a fresh client and the duplicate comes straight back."""
-        t = self.tracker([[(158, 0)], [(7, 1)]])
-        t.poll(0)
-        t.poll(0)
-        restored = rc.PurificationCountTracker()
-        restored.load_json(t.to_json())
-        self.assertEqual(restored.purified_species, {158, 7})
-        self.assertEqual(restored.total_purified, 2)
-
-    def test_a_corrupt_ledger_degrades_rather_than_raising(self):
-        for junk in ({}, {"purified_species": "no"}, {"total_purified": None}):
-            t = rc.PurificationCountTracker()
-            t.load_json(junk)
-            self.assertEqual(t.purified_species, set())
 
 
 class TestCatchScanningSeparatesItsSources(unittest.TestCase):

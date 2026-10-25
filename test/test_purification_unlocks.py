@@ -263,7 +263,7 @@ class TestTheClientSendsPurifications(unittest.TestCase):
 
         with mock.patch.object(Client, "_send_checks", side_effect=fake_send), \
                 mock.patch.object(Client.ram_client, "read_shadow_monitor", return_value=monitor):
-            asyncio.get_event_loop().run_until_complete(Client.check_purifications(ctx))
+            asyncio.run(Client.check_purifications(ctx))
         return sent
 
     def test_the_patch_log_names_the_species_this_seed_gave_the_id(self):

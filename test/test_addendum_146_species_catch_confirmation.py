@@ -171,12 +171,6 @@ class TestDescribe(unittest.TestCase):
 
 
 class TestConstantsMatchTheOtherTrackers(unittest.TestCase):
-    def test_the_confirm_streak_is_the_one_addendum_99_settled_on(self) -> None:
-        # ADDENDUM 174 deleted ChestCountTracker -- the chest signal is a single bit that only turns on, so
-        # it needs no confirm streak at all. NamedPurificationTracker is still the live comparison.
-        self.assertEqual(rc.SpeciesCatchTracker._CONFIRM_STREAK,
-                         rc.NamedPurificationTracker._CONFIRM_STREAK)
-
     def test_one_new_box_species_per_poll_is_the_ceiling(self) -> None:
         """A catch, a deposit and a withdrawal each move exactly one Pokemon; nothing in normal play moves two
         between two polls a second apart."""

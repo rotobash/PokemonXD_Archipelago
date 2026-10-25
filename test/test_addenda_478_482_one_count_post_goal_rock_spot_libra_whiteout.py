@@ -1,6 +1,6 @@
 """ADDENDA 478-482 (2026-10-13).
 
-478 -- one count per purified Pokemon, ever; the fixes only fill holes.
+478 -- (its purification count tests went with the heuristic tracker.)
 479 -- no checks on Shadows that are only reachable after the goal.
 480 -- the Poke Spots enter at the news point (0x37) and a watcher repairs a byte that falls below it.
 481 -- SS Libra needs only the Phenac unlock (and the Scooter Upgrade when shuffled), not Phenac cleared.
@@ -13,148 +13,6 @@ import unittest
 from unittest import mock
 
 from .. import ram_client as rc
-
-TID = 0x12345678
-QUILAVA, TYPHLOSION, CYNDAQUIL = 156, 157, 155
-
-
-def _rec(slot, dex, shadow_id, purified=True, source="box"):
-    return rc.ShadowRecord(source, slot, dex, shadow_id, rc.PURIFIED_FLAG_VALUE if purified else 0, level=40,
-                           trainer_id=TID, pid=0x1000 + shadow_id if shadow_id else 0x9000 + slot, cur_hp=50,
-                           max_hp=50)
-
-
-def _scan(t, records, owned=(), shadow_dex=(QUILAVA, TYPHLOSION, CYNDAQUIL), **kw):
-    # An ordinary party member: the save's own trainer id, which rule 2 needs before it will infer anything.
-    records = list(records) + [rc.ShadowRecord("party", 5, 263, 0, 0, level=10, trainer_id=TID, pid=0xABCD,
-                                               cur_hp=20, max_hp=20)]
-    out = []
-    for _ in range(rc.PURIFICATION_SCAN_CONFIRM_SCANS):
-        out += t.observe_records(list(records), seed_shadow_dex=set(shadow_dex), trusted_owned_dex=set(owned), **kw)
-    return out
-
-
-# --- 478 ------------------------------------------------------------------------------------------------------
-
-class TestFamilies(unittest.TestCase):
-    def test_a_line_is_one_family(self) -> None:
-        self.assertEqual(rc.evolution_family(QUILAVA), rc.evolution_family(TYPHLOSION))
-        self.assertEqual(CYNDAQUIL, rc.evolution_family(TYPHLOSION))
-        self.assertEqual(rc.evolution_family(133), rc.evolution_family(197), "Eevee's branches")
-        self.assertEqual(rc.evolution_family(172), rc.evolution_family(26), "Pichu -> Raichu")
-        self.assertNotEqual(rc.evolution_family(1), rc.evolution_family(4))
-        self.assertEqual(9999, rc.evolution_family(9999))
-
-
-class TestOneCountPerPokemon(unittest.TestCase):
-    def test_infernos_pair_counts_twice_not_three_times(self) -> None:
-        t = rc.PurificationCountTracker()
-        self.assertEqual(1, len(_scan(t, [_rec(0, TYPHLOSION, 10)])))           # the Quilava, already evolved
-        self.assertEqual(1, len(_scan(t, [_rec(0, TYPHLOSION, 10), _rec(1, TYPHLOSION, 44)])))
-        for _ in range(5):
-            self.assertEqual([], _scan(t, [_rec(0, TYPHLOSION, 10), _rec(1, TYPHLOSION, 44)]))
-        self.assertEqual(2, t.total_purified)
-        self.assertEqual(0, t.caught_up, "nothing to repair: each id counted itself")
-
-    def test_an_id_less_record_of_a_counted_family_is_not_counted_again(self) -> None:
-        t = rc.PurificationCountTracker()
-        _scan(t, [_rec(0, QUILAVA, 10)])
-        self.assertEqual([], _scan(t, [_rec(5, TYPHLOSION, 0, purified=False)], owned={TYPHLOSION}))
-        self.assertEqual(1, t.total_purified)
-
-    def test_a_count_made_without_an_id_is_claimed_by_it_later(self) -> None:
-        t = rc.PurificationCountTracker()
-        self.assertEqual(1, len(_scan(t, [_rec(5, QUILAVA, 0, purified=False)], owned={QUILAVA})))
-        self.assertEqual([CYNDAQUIL], t.species_only_families)
-        self.assertEqual([], _scan(t, [_rec(0, TYPHLOSION, 10)]), "the same Pokemon, evolved, with its id")
-        self.assertEqual(1, t.total_purified)
-        self.assertEqual(1, t.claimed_species_only)
-        self.assertEqual([], t.species_only_families)
-
-    def test_a_flip_without_a_purified_record_counts_nothing(self) -> None:
-        t = rc.PurificationCountTracker()
-        for record in (None, _rec(0, QUILAVA, 0, purified=False), _rec(0, QUILAVA, 10, purified=False)):
-            with mock.patch.object(rc.NamedPurificationTracker, "poll", return_value=[(QUILAVA, 0)]), \
-                    mock.patch.object(rc, "_read_shadow_record", return_value=record):
-                self.assertEqual([], t.poll(0x80400000))
-        self.assertEqual(3, t.flip_deferred)
-        self.assertEqual(0, t.total_purified)
-
-    def test_flip_and_scan_agree_on_one_pokemon(self) -> None:
-        t = rc.PurificationCountTracker()
-        with mock.patch.object(rc.NamedPurificationTracker, "poll", return_value=[(999, 0)]), \
-                mock.patch.object(rc, "_read_shadow_record", return_value=_rec(0, QUILAVA, 10, source="party")):
-            self.assertEqual(1, len(t.poll(0x80400000)))
-            self.assertEqual([], t.poll(0x80400000))
-        self.assertEqual([], _scan(t, [_rec(3, TYPHLOSION, 10)]))
-        self.assertEqual(1, t.total_purified)
-
-    def test_the_ledger_round_trips(self) -> None:
-        t = rc.PurificationCountTracker()
-        _scan(t, [_rec(5, QUILAVA, 0, purified=False)], owned={QUILAVA})
-        back = rc.PurificationCountTracker()
-        back.load_json(t.to_json())
-        self.assertEqual([CYNDAQUIL], back.species_only_families)
-        self.assertEqual(0, back.legacy_unclaimed)
-        self.assertEqual([], _scan(back, [_rec(0, TYPHLOSION, 10)]))
-
-    def test_an_older_state_gets_bounded_wildcards(self) -> None:
-        t = rc.PurificationCountTracker()
-        t.load_json({"total_purified": 3, "purified_species": [QUILAVA, 1, 4], "purified_shadow_ids": [7]})
-        self.assertEqual(2, t.legacy_unclaimed)
-        self.assertEqual([], _scan(t, [_rec(0, TYPHLOSION, 10)]), "Quilava's family was counted without an id")
-        self.assertEqual(1, len(_scan(t, [_rec(0, TYPHLOSION, 10), _rec(1, 25, 11)])), "Pikachu's never was")
-        self.assertEqual(4, t.total_purified)
-
-
-class TestNeverMoreChecksThanPokemon(unittest.TestCase):
-    """The property itself, driven at random: N distinct purified Pokemon, seen in any order, by
-    flip and scan, in party and box, before and after evolving, with and without their ids -- never more than N
-    counts. And when each one is eventually seen by its id, exactly N."""
-
-    LINES = [(1, 2, 3), (4, 5, 6), (7, 8, 9), (155, 156, 157), (152, 153, 154), (92, 93, 94), (147, 148, 149)]
-
-    def test_random_histories(self) -> None:
-        rng = random.Random(478)
-        for trial in range(300):
-            t = rc.PurificationCountTracker()
-            if rng.random() < 0.3:
-                t.load_json(t.to_json())
-            pokemon = []
-            for shadow_id in range(1, rng.randint(2, 9)):
-                line = rng.choice(self.LINES)
-                pokemon.append([shadow_id, list(line[rng.randrange(len(line) - 1):])])   # species now, later
-            shadow_dex = {s for line in self.LINES for s in line}
-            for _ in range(40):
-                p = rng.choice(pokemon)
-                if rng.random() < 0.2 and len(p[1]) > 1:
-                    p[1].pop(0)                                                       # it evolves
-                dex = p[1][0]
-                roll = rng.random()
-                if roll < 0.3:
-                    with mock.patch.object(rc.NamedPurificationTracker, "poll",
-                                           return_value=[(rng.choice(list(shadow_dex)), 0)]), \
-                            mock.patch.object(rc, "_read_shadow_record",
-                                              return_value=_rec(0, dex, p[0], source="party")
-                                              if rng.random() < 0.7 else None):
-                        t.poll(0x80400000)
-                elif roll < 0.45:
-                    _scan(t, [_rec(rng.randrange(30), dex, 0, purified=False)], owned=shadow_dex,
-                          shadow_dex=shadow_dex)
-                else:
-                    _scan(t, [_rec(rng.randrange(30), dex, p[0])], shadow_dex=shadow_dex)
-                self.assertLessEqual(t.total_purified, len(pokemon), trial)
-                if rng.random() < 0.1:
-                    t.load_json(t.to_json())
-            for p in pokemon:
-                _scan(t, [_rec(0, p[1][0], p[0])], shadow_dex=shadow_dex)
-            self.assertLessEqual(t.total_purified, len(pokemon), trial)
-            self.assertGreaterEqual(t.total_purified, len(pokemon) - sum(
-                1 for line in self.LINES if sum(1 for p in pokemon if p[1][0] in line) > 1), trial)
-
-
-
-# --- 479 ------------------------------------------------------------------------------------------------------
 
 from . import PokemonXDTestBase  # noqa: E402
 from .. import locations, species  # noqa: E402
@@ -214,7 +72,6 @@ class TestMovedOffGreevilTheyKeepTheirChecks(_PostGoal):
         world = self.multiworld.worlds[self.player]
         self.assertEqual(82, world._purification_location_count, "only the Dragonite is still post-goal")
         self.assertLessEqual(len(world._post_goal_only_dex), 1)
-
 
 
 class TestShuffledLugiaNeverLandsWithoutChecks(_PostGoal):
@@ -288,7 +145,6 @@ class TestTheRockSpotGuard(unittest.TestCase):
         memory = rc.AreaStoryByteMemory()
         memory.highest_by_region = {"Poke Spots": 0x35}
         self.assertEqual(0x37, memory.target_for("Poke Spots"))
-
 
 
 # --- 481 ------------------------------------------------------------------------------------------------------
