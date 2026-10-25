@@ -302,15 +302,17 @@ class TestPurificationWeightsAreACensus(unittest.TestCase):
         """Gated by vanilla Shadow Pokemon placement and their trainers' locations. All 83."""
         self.assertEqual(shadow_regions.total_shadow_count(), 83)
 
+    # RETARGETED (per-species purifications): rules.py's ladder table is gone; the census it was built from stays.
     def test_the_weights_sum_to_the_ladder_length(self) -> None:
-        weights = rules._PURIFICATION_WEIGHT_BY_REGION
+        weights = shadow_regions.purification_weights(locations.VANILLA_SHADOW_COUNT)
         self.assertEqual(sum(weights.values()), locations.VANILLA_SHADOW_COUNT)
 
     def test_the_tombstone_is_gone(self) -> None:
         """The old table carried `"_retired Relic Forest": 0` for a region that stopped existing in ADDENDUM
         169. A census has no tombstones -- a region with no shadows is absent, not present-and-zero."""
-        self.assertNotIn("_retired Relic Forest", rules._PURIFICATION_WEIGHT_BY_REGION)
-        for region in rules._PURIFICATION_WEIGHT_BY_REGION:
+        weights = shadow_regions.purification_weights(locations.VANILLA_SHADOW_COUNT)
+        self.assertNotIn("_retired Relic Forest", weights)
+        for region in weights:
             self.assertIn(region, regions.REGION_NAMES, region)
 
     def test_the_four_unresolvable_shadows_are_named_not_defaulted(self) -> None:

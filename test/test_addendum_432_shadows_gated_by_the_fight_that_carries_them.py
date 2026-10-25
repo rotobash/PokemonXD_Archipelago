@@ -15,7 +15,7 @@ import unittest
 from BaseClasses import CollectionState
 
 from . import PokemonXDTestBase
-from .. import items, rules
+from .. import items, locations as L, rules
 from ..game_data import load_json_data_file, missable_trainers, shadow_regions as SR
 from ..game_data import trainer_placements, trainer_roster
 
@@ -74,7 +74,8 @@ class TestTheGates(unittest.TestCase):
 
 
 class _Counted(PokemonXDTestBase):
-    """Purify N against a hand-built state: exactly the Shadows its reachable fights carry."""
+    """RETARGETED (per-species purifications): each `Purify - X` against a hand-built state -- open exactly when the
+    Purify Chamber is reachable and a fight carrying an X Shadow is."""
 
     def _state_without(self, held_back: "set[str]") -> CollectionState:
         state = CollectionState(self.multiworld)
@@ -83,25 +84,24 @@ class _Counted(PokemonXDTestBase):
                 state.collect(item, True)
         return state
 
-    def _available(self, state) -> int:
-        total = 0
-        for ways, count in rules._purification_shadow_groups(self.multiworld.worlds[self.player]):
-            if any(all(state.can_reach(r, player=self.player) for r in regions)
-                   and all(state.has(i, self.player) for i in held) for regions, held in ways):
-                total += count
-        return total
+    def _open(self, state) -> "set[int]":
+        world = self.multiworld.worlds[self.player]
+        return {dex for dex, ways in world._purification_gates.items()
+                if rules.purification_way_is_open(state, self.player, ways)}
 
-    def _reachable(self, state, n: int) -> bool:
-        return self.multiworld.get_location(f"Purify {n} Shadow Pokemon", self.player).can_reach(state)
+    def _available(self, state) -> int:
+        return len(self._open(state))
+
+    def _reachable(self, state, dex: int) -> bool:
+        return self.multiworld.get_location(L.purification_location_name(dex), self.player).can_reach(state)
 
     def _assert_boundary(self, state):
-        n = self._available(state)
-        if n >= 1:
-            self.assertTrue(self._reachable(state, n), n)
-        total = self.multiworld.worlds[self.player]._purification_location_count
-        if n < total:
-            self.assertFalse(self._reachable(state, n + 1), n)
-        return n
+        world = self.multiworld.worlds[self.player]
+        floor = state.can_reach(rules.shadow_regions_floor(), player=self.player)
+        open_dex = self._open(state)
+        for dex in world._purifiable_shadow_dex:
+            self.assertEqual(floor and dex in open_dex, self._reachable(state, dex), dex)
+        return len(open_dex)
 
 
 class TestLocationShuffleCounts(_Counted):
@@ -125,7 +125,8 @@ class TestLocationShuffleCounts(_Counted):
         state = self.multiworld.get_all_state(False)
         total = self.multiworld.worlds[self.player]._purification_location_count
         self.assertEqual(total, self._available(state))
-        self.assertTrue(self._reachable(state, total))
+        for dex in self.multiworld.worlds[self.player]._purifiable_shadow_dex:
+            self.assertTrue(self._reachable(state, dex), dex)
 
 
 class TestVanillaChainCounts(_Counted):

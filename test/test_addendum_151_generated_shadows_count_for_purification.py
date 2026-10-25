@@ -70,8 +70,14 @@ class TestMirroredConstantsDoNotDrift(unittest.TestCase):
         # ADDENDUM 174: the two tables are built independently (ram_client cannot import locations), so the
         # name FORMAT is the duplicated part and a one-character difference would make every chest check bounce.
         self.assertEqual(rc.CHEST_ID_TO_LOCATION, locations.CHEST_ID_TO_LOCATION)
-        for count in (1, rc.PURIFICATION_LOCATION_COUNT):
-            self.assertIn(rc.purification_location_name(count), locations.LOCATION_TABLE)
+        # RETARGETED (per-species purifications): the client names purifications with locations.py's own
+        # `purification_location_name`, by the species main.dol's Shadow list gives the purified id.
+        client = (pathlib.Path(__file__).resolve().parent.parent / "Client.py").read_text(encoding="utf-8")
+        self.assertIn("name = purification_location_name(dex)", client)
+        self.assertNotIn("rc.purification_location_name", client)
+        self.assertNotIn("ram_client.purification_location_name", client)
+        for dex in range(1, 387):
+            self.assertIn(locations.purification_location_name(dex), locations.LOCATION_TABLE)
 
 
 class TestSpeciesUniqueness(unittest.TestCase):

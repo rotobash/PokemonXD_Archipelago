@@ -33,25 +33,26 @@ class LocationData:
 
 
 # ADDENDUM 415: the most Shadows a seed can hold -- 83 vanilla + Shadow Pokemon Expansion's maximum of 44 = 127.
-# Was 32, while `PurificationProgressionCap` already ran to 127 and said "There are 83 + your shadow expansion
-# setting purifications available", so the purification checks are raised to match.
-# A seed creates `Purify 1..(83 + the Shadows its expansion really added)`; see `create_regions_and_locations`.
 VANILLA_SHADOW_COUNT = 83
 # ADDENDUM 479: the vanilla Shadows that can be had before the goal -- all but Greevil's seven (Lugia and his six)
-# and Miror B.'s post-game Dragonite. Only these get `Purify N` rungs; `PURIFICATION_LOCATION_COUNT` keeps the old
-# 127-name table so every location id stays where it was.
+# and Miror B.'s post-game Dragonite. Only these get purification checks.
 POST_GOAL_VANILLA_SHADOW_COUNT = 8
 PRE_GOAL_VANILLA_SHADOW_COUNT = VANILLA_SHADOW_COUNT - POST_GOAL_VANILLA_SHADOW_COUNT
 PURIFICATION_LOCATION_COUNT = VANILLA_SHADOW_COUNT + 44
 
+# One "Purify - {species}" per species, replacing the "Purify N Shadow Pokemon" ladder: a seed creates the ones for
+# the species its pre-goal Shadows really are (`world._purifiable_shadow_dex`), the same way it trims "Catch - X".
+# The ladder's ids (604-635, 1692-1786) stay reserved and are never reused.
+PURIFICATION_LOCATION_PREFIX = "Purify - "
 
-def purification_location_name(count: int) -> str:
-    """"Purify N Shadow Pokemon" for cumulative count N."""
-    return f"Purify {count} Shadow Pokemon"
+
+def purification_location_name(dex: int) -> str:
+    """"Purify - {species}" for National Dex number `dex`."""
+    return f"{PURIFICATION_LOCATION_PREFIX}{species.NATIONAL_DEX[dex]}"
 
 
-PURIFICATION_LOCATION_TO_COUNT: dict[str, int] = {
-    purification_location_name(n): n for n in range(1, PURIFICATION_LOCATION_COUNT + 1)
+PURIFICATION_LOCATION_TO_DEX: dict[str, int] = {
+    purification_location_name(n): n for n in sorted(species.NATIONAL_DEX)
 }
 
 
@@ -804,7 +805,7 @@ LOCATIONS_BY_REGION: dict[str, list[str]] = {
     "Pokemon Storage": [species.location_name_for_species(n) for n in sorted(species.NATIONAL_DEX)] + [
         EEVEELUTION_LOCATION_NAME,
     ],
-    "Shadow Pokemon Purification": [purification_location_name(n) for n in range(1, PURIFICATION_LOCATION_COUNT + 1)],
+    "Shadow Pokemon Purification": list(PURIFICATION_LOCATION_TO_DEX),
     # ADDENDUM 175: only the trainers whose region nobody knows -- 37 of the 232, all filler-only. Reachable
     # from the start so they can still receive filler, which AP requires of every location.
     "Unique Trainer Defeats": [
@@ -1527,38 +1528,7 @@ _FROZEN_LOCATION_OFFSETS: dict[str, int] = {
     'Catch - Rayquaza': 601,
     'Catch - Jirachi': 602,
     'Catch - Deoxys': 603,
-    'Purify 1 Shadow Pokemon': 604,
-    'Purify 2 Shadow Pokemon': 605,
-    'Purify 3 Shadow Pokemon': 606,
-    'Purify 4 Shadow Pokemon': 607,
-    'Purify 5 Shadow Pokemon': 608,
-    'Purify 6 Shadow Pokemon': 609,
-    'Purify 7 Shadow Pokemon': 610,
-    'Purify 8 Shadow Pokemon': 611,
-    'Purify 9 Shadow Pokemon': 612,
-    'Purify 10 Shadow Pokemon': 613,
-    'Purify 11 Shadow Pokemon': 614,
-    'Purify 12 Shadow Pokemon': 615,
-    'Purify 13 Shadow Pokemon': 616,
-    'Purify 14 Shadow Pokemon': 617,
-    'Purify 15 Shadow Pokemon': 618,
-    'Purify 16 Shadow Pokemon': 619,
-    'Purify 17 Shadow Pokemon': 620,
-    'Purify 18 Shadow Pokemon': 621,
-    'Purify 19 Shadow Pokemon': 622,
-    'Purify 20 Shadow Pokemon': 623,
-    'Purify 21 Shadow Pokemon': 624,
-    'Purify 22 Shadow Pokemon': 625,
-    'Purify 23 Shadow Pokemon': 626,
-    'Purify 24 Shadow Pokemon': 627,
-    'Purify 25 Shadow Pokemon': 628,
-    'Purify 26 Shadow Pokemon': 629,
-    'Purify 27 Shadow Pokemon': 630,
-    'Purify 28 Shadow Pokemon': 631,
-    'Purify 29 Shadow Pokemon': 632,
-    'Purify 30 Shadow Pokemon': 633,
-    'Purify 31 Shadow Pokemon': 634,
-    'Purify 32 Shadow Pokemon': 635,
+    # 604-635: the retired 'Purify 1..32 Shadow Pokemon' -- reserved, never reused.
     'Open 1 Chests': 636,
     'Open 2 Chests': 637,
     'Open 3 Chests': 638,
@@ -2559,9 +2529,11 @@ _FROZEN_LOCATION_OFFSETS: dict[str, int] = {
     'Defeat Biden (Any)': 1690,
     'Defeat Zook (Any)': 1691,
 }
-# ADDENDUM 415: Purify 33..127, frozen to 1692..1786 -- a literal base, so a later addition cannot shift them.
-for _n in range(33, PURIFICATION_LOCATION_COUNT + 1):
-    _FROZEN_LOCATION_OFFSETS[purification_location_name(_n)] = 1692 + (_n - 33)
+# 1692..1786: the retired 'Purify 33..127 Shadow Pokemon' -- reserved, never reused.
+# "Purify - {species}", frozen to 1900 + (dex - 1) = 1900..2285 -- a literal base, in National Dex order.
+for _name, _dex in PURIFICATION_LOCATION_TO_DEX.items():
+    _FROZEN_LOCATION_OFFSETS[_name] = 1900 + (_dex - 1)
+del _name, _dex
 # Mt. Battle's trainers 4-100, frozen from 1787 in trainer order.
 for _i, _name in zip(mtbattle_trainer_data.MT_BATTLE_CHECK_TRAINER_INDICES,
                      mtbattle_trainer_data.MT_BATTLE_DEFEAT_LOCATION_NAMES):
@@ -2606,7 +2578,7 @@ LOCATION_NAME_GROUPS: dict[str, set[str]] = {
     "Overworld Items": {
         name for name in LOCATION_TABLE
         if not name.startswith("Catch - ")
-        and not name.startswith("Purify ")
+        and not name.startswith(PURIFICATION_LOCATION_PREFIX)
         and not is_chest_location(name)
         and not name.startswith("Defeat - ")
         and not _is_trainer_defeat_count_name(name)
@@ -2616,7 +2588,7 @@ LOCATION_NAME_GROUPS: dict[str, set[str]] = {
     },
     "Mt. Battle Trainers": set(mtbattle_trainer_data.MT_BATTLE_DEFEAT_LOCATION_NAMES),
     "Species Catches": {name for name in LOCATION_TABLE if name.startswith("Catch - ")},
-    "Shadow Purifications": {name for name in LOCATION_TABLE if name.startswith("Purify ")},
+    "Shadow Purifications": set(PURIFICATION_LOCATION_TO_DEX),
     # Exact sets rather than prefix scans, for the reason above.
     "Chest Openings": {name for name in LOCATION_TABLE if is_chest_location(name)},
     "Trainer Defeats": {name for name in LOCATION_TABLE if name.startswith("Defeat - ")},
@@ -2687,12 +2659,11 @@ def create_regions_and_locations(world) -> dict[str, Region]:
     # ADDENDUM 457: everything Miror B. -- his defeats and the Shadows his teams carry -- is filler-only.
     miror_b_locations = miror_b_filler_location_names(world) - {guaranteed_location, EEVEELUTION_LOCATION_NAME}
     # ADDENDUM 415: "add an option (above the purification number count) to turn purifications as a whole on or
-    # off as checks." And when on, one `Purify N` per Shadow this seed really holds.
+    # off as checks." And when on, one `Purify - X` per species this seed's pre-goal Shadows really are; only those
+    # `world._purification_progression_dex` picked may hold progression or useful items.
     include_purifications = bool(getattr(world.options, "purification_checks", 1))
-    purification_location_count = int(getattr(world, "_purification_location_count", None)
-                                       or PRE_GOAL_VANILLA_SHADOW_COUNT + int(getattr(world.options,
-                                                                             "shadow_pokemon_expansion", 0)))
-    purification_location_count = min(purification_location_count, PURIFICATION_LOCATION_COUNT)
+    purifiable_dex: "set[int]" = set(getattr(world, "_purifiable_shadow_dex", None) or ())
+    purification_progression_dex: "set[int]" = set(getattr(world, "_purification_progression_dex", None) or ())
     # ADDENDUM 270: `Unlock - X` locations exist only when travel randomization does, because
     # `enforce_travel_locks` returns immediately with the option off -- otherwise eleven checks nothing could
     # fire, stranding eleven filler items and the slot below 100%.
@@ -2724,7 +2695,7 @@ def create_regions_and_locations(world) -> dict[str, Region]:
             is_species_catch = location_name.startswith("Catch - ")
             if starter_randomized and location_name == EEVEELUTION_LOCATION_NAME:
                 continue   # ADDENDUM 443: no guaranteed Eevee to evolve
-            is_purification = location_name.startswith("Purify ")
+            is_purification = location_name in PURIFICATION_LOCATION_TO_DEX
             # Exact set membership, not the retired ladder's prefix test -- a per-chest name cannot be
             # pattern-matched safely against overworld-item names that also mention chests.
             is_chest_opening = is_chest_location(location_name)
@@ -2745,7 +2716,7 @@ def create_regions_and_locations(world) -> dict[str, Region]:
                 # ADDENDUM 415: the option first, then this seed's own Shadow count.
                 if not include_purifications:
                     continue
-                if PURIFICATION_LOCATION_TO_COUNT.get(location_name, 0) > purification_location_count:
+                if PURIFICATION_LOCATION_TO_DEX[location_name] not in purifiable_dex:
                     continue
             if is_chest_opening:
                 if not include_chests:
@@ -2819,13 +2790,11 @@ def create_regions_and_locations(world) -> dict[str, Region]:
             # which is all `world_checks` ever did. Kept as named constants so the branches below still read.
             world_checks_excluded = False
             everything_excluded = False
-            # A trainer you can permanently walk past, and a purification threshold past the player's cap,
-            # are the two cases where ProgressionLocations must not apply at any setting: progression on a
-            # check that cannot be re-obtained is an unwinnable seed, not a modelling risk.
+            # A trainer you can permanently walk past, and a purification the player's cap did not pick, are the
+            # two cases where ProgressionLocations must not apply at any setting: progression on a check that
+            # cannot be re-obtained is an unwinnable seed, not a modelling risk.
             if is_purification:
-                cap = int(getattr(world.options, "purification_progression_cap",
-                                  PURIFICATION_LOCATION_COUNT))
-                if PURIFICATION_LOCATION_TO_COUNT.get(location_name, 0) > cap:
+                if PURIFICATION_LOCATION_TO_DEX[location_name] not in purification_progression_dex:
                     location.progress_type = LocationProgressType.EXCLUDED
                     region.locations.append(location)
                     continue

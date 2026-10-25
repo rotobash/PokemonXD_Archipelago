@@ -209,7 +209,7 @@ DDPK_REGION_FALLBACK: "dict[int, tuple[str, str]]" = {
 # could softlock; their trainers stay randomized.
 # Shadow Lugia (his first fight, DDPK 73) and the six of his second (DDPK 74-79, the goal fight itself) can only be
 # PURIFIED once Greevil is beaten. These Shadows now have no checks at all: no `Catch - X` for a species only they
-# carry, and no `Purify N` counted for them -- this seed's purification ladder is one rung per Shadow that can be
+# carry, and no `Purify - X` for them -- this seed's purification checks are one per Shadow species that can be
 # had before the goal. Their trainers are untouched. A Shadow MOVED off Greevil (Remove Greevil Shadows, which
 # hands his seven to unmissable trainers elsewhere) is not at its Greevil row any more and keeps its checks.
 POST_GOAL_DRAGONITE_DDPK = 80

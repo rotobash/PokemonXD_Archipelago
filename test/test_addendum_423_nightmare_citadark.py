@@ -167,12 +167,13 @@ class TestOn(PokemonXDTestBase):
         self.assertFalse({int(p["trainer_index"]) for p in plans} & set(citadark_trainer_indices()))
 
     def test_only_lugia_waits_on_citadark(self) -> None:
-        from .. import rules
-        weights = rules._purification_weights_for(self.multiworld.worlds[self.player])
-        self.assertEqual(46, sum(weights.values()))
         # RETARGETED BY ADDENDUM 432: Lugia, and Miror B.'s post-game Dragonite, which was filed at the Poke Spots by
         # name and is now held to the end game. RETARGETED AGAIN BY ADDENDUM 479: neither has a rung any more.
-        self.assertIsNone(weights.get("Citadark Isle"))
+        # RETARGETED (per-species purifications): every purification has a way that never sets foot on the island.
+        gates = self.multiworld.worlds[self.player]._purification_gates
+        self.assertEqual(46 + 35 + 30, len(gates))
+        for dex, ways in gates.items():
+            self.assertTrue(any("Citadark Isle" not in regions for regions, _items in ways), dex)
 
     def test_seed_data(self) -> None:
         world = self.multiworld.worlds[self.player]

@@ -14,10 +14,15 @@ GameCube EABI lays it out -- u16 aligned to 2, u32 and pointers to 4, big-endian
             +0x38C  u16  purified[128]
             +0x48C  u16  pokemonCounter
             +0x48E  {u8 level, pad, u16 species, u16 shadowIndex}[128]   every capture, Shadow or wild
-    +0x790  GiveAPItems                     client -> game; not used yet
+    +0x790  GiveAPItems                     client -> game; 4-aligned (ClientPokemonGetParam holds a pointer)
+            +0x790  u16  pokemonCounter
+            +0x794  {u8 level, pad, u16 species, u16 shadowId, pad, ptr nameId, u32 exp}[128]   not used yet
+            +0xF94  u16  purifyCounter
+            +0xF96  u16  purified[128]      every Shadow id the player may purify (`AP_ENABLE_PURIFYCHECKS`)
 
 Counters only ever grow while the game runs, and the patch does not bound them. The whole block is plain RAM, so
-it is gone on a power cycle (a soft reset or a save state keeps whatever it held).
+it is gone on a power cycle (a soft reset or a save state keeps whatever it held) -- which is why the client
+rewrites the `give` half whenever it reads differently from what the multiworld has sent.
 """
 from __future__ import annotations
 
@@ -48,6 +53,12 @@ CATCH_SHADOW_INDEX_OFFSET = 0x4
 
 #: Everything the client reads: the flags through the end of the catch log.
 CHECKS_READ_SIZE = CATCHES_OFFSET + SHADOW_CAPACITY * CATCH_ENTRY_SIZE   # 0x78E
+
+GIVE_OFFSET = 0x790
+GIVE_POKEMON_ENTRY_SIZE = 0x10
+GIVE_PURIFY_COUNTER_OFFSET = GIVE_OFFSET + 4 + SHADOW_CAPACITY * GIVE_POKEMON_ENTRY_SIZE   # 0xF94
+GIVE_PURIFIED_OFFSET = GIVE_PURIFY_COUNTER_OFFSET + 2                                      # 0xF96
+GIVE_PURIFY_READ_SIZE = 2 + 2 * SHADOW_CAPACITY
 
 # `AP_ENABLE_*` in the patch: bit n of `flags`.
 FLAG_ITEM_CHECKS = 1 << 0
@@ -123,6 +134,78 @@ def write_flags(flags: int) -> None:
 def write_death_link(pending: bool) -> None:
     from . import ram_client
     ram_client.write_bytes(AP_BLOCK_ADDRESS + DEATH_LINK_OFFSET, b"\x01" if pending else b"\x00")
+
+
+def parse_give_purified(raw: bytes) -> "tuple[int, ...] | None":
+    """`give.purified` as written, or None when the counter is past the array (not the patch's bytes)."""
+    if len(raw) < GIVE_PURIFY_READ_SIZE:
+        return None
+    count = _u16(raw, 0)
+    if count > SHADOW_CAPACITY:
+        return None
+    return tuple(_u16(raw, 2 + 2 * i) for i in range(count))
+
+
+def pack_give_purified(shadow_ids: "Sequence[int]") -> bytes:
+    """Counter then entries, in one buffer. Ids past the array's capacity are dropped."""
+    ids = list(shadow_ids)[:SHADOW_CAPACITY]
+    return struct.pack(f">H{len(ids)}H", len(ids), *ids)
+
+
+def read_give_purified() -> "tuple[int, ...] | None":
+    from . import ram_client
+    return parse_give_purified(ram_client.read_bytes(AP_BLOCK_ADDRESS + GIVE_PURIFY_COUNTER_OFFSET,
+                                                     GIVE_PURIFY_READ_SIZE))
+
+
+def write_give_purified(shadow_ids: "Sequence[int]") -> None:
+    """The entries first, the counter last: the patch scans `purified[0..counter)`, so a counter written before its
+    entries would let it read stale ids for a frame."""
+    from . import ram_client
+    packed = pack_give_purified(shadow_ids)
+    if len(packed) > 2:
+        ram_client.write_bytes(AP_BLOCK_ADDRESS + GIVE_PURIFIED_OFFSET, packed[2:])
+    ram_client.write_bytes(AP_BLOCK_ADDRESS + GIVE_PURIFY_COUNTER_OFFSET, packed[:2])
+
+
+def read_dark_pokemon_list() -> "tuple[int, ...] | None":
+    """main.dol's Shadow list, {DDPK index: internal species} as a tuple. The ISO patch rewrites it so every Shadow --
+    randomized, relocated or added by the expansion -- carries its real species, so this is the seed's own answer to
+    "which Shadow ids are a Teddiursa". In the DOL, so it is readable from boot, before any save is loaded."""
+    from . import ram_client
+    from .game_data.shadow_engine import DARK_POKEMON_LIST_ADDRESS, DARK_POKEMON_LIST_LENGTH
+
+    raw = ram_client.read_bytes(DARK_POKEMON_LIST_ADDRESS, 2 * DARK_POKEMON_LIST_LENGTH)
+    if len(raw) < 2 * DARK_POKEMON_LIST_LENGTH:
+        return None
+    return parse_dark_pokemon_list(raw)
+
+
+def parse_dark_pokemon_list(raw: bytes) -> "tuple[int, ...] | None":
+    """None unless it reads as the list: entry 0 empty and every vanilla Shadow's slot (1-83) holding a species.
+    Before the DOL is loaded the address reads zero."""
+    from .game_data.shadow_engine import DARK_POKEMON_LIST_LENGTH
+
+    if len(raw) < 2 * DARK_POKEMON_LIST_LENGTH:
+        return None
+    listing = struct.unpack(f">{DARK_POKEMON_LIST_LENGTH}H", raw[:2 * DARK_POKEMON_LIST_LENGTH])
+    if listing[0] != 0 or not all(listing[1:84]):
+        return None
+    return listing
+
+
+def shadow_ids_by_dex(dark_pokemon_list: "Sequence[int]") -> "dict[int, tuple[int, ...]]":
+    """National Dex -> every Shadow id the list gives that species. Id 0 is not a Shadow."""
+    from .tools.xd_species_index import national_dex_for
+
+    out: "dict[int, list[int]]" = {}
+    for shadow_id, species in enumerate(dark_pokemon_list):
+        if shadow_id == 0 or not species:
+            continue
+        dex = national_dex_for(species)
+        if dex is not None:
+            out.setdefault(dex, []).append(shadow_id)
+    return {dex: tuple(ids) for dex, ids in out.items()}
 
 
 def caught_dex(block: ApPatchBlock) -> "set[int]":

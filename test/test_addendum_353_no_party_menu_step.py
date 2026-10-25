@@ -123,24 +123,21 @@ class TestTheGateIsGoneFromTheMainLoop(unittest.TestCase):
         self.assertNotIn("_looks_ingame", block)
 
     def test_the_one_surviving_gate_is_around_the_correlation_that_needs_it(self):
-        """`PurificationTracker.poll` correlates the recap array against PARTY_BASE, and that has never been
-        confirmed safe against an all-zero PARTY_BASE. That call keeps the gate; nothing else does."""
+        """RETARGETED (per-species purifications): the PARTY_BASE correlation is gone -- purifications come from the
+        AP patch's log and the save's Shadow status table -- so the last gate went with it."""
         start = CLIENT_SOURCE.index("async def check_purifications")
-        end = CLIENT_SOURCE.index("\nasync def ", start + 1)
+        end = CLIENT_SOURCE.index("\ndef ", start + 1)
         body = CLIENT_SOURCE[start:end]
-        self.assertIn("if _looks_ingame():", body)
-        gate = body.index("if _looks_ingame():")
-        self.assertLess(gate, body.index("ctx.purification_tracker.poll("))
+        self.assertNotIn("_looks_ingame", body)
+        self.assertNotIn("PARTY_BASE", body)
 
     def test_the_state_scan_is_not_behind_that_gate(self):
-        """ADDENDUM 318's scan is what covers the Purify Chamber and a purification from before the client
-        connected. With the menu unopened it is the ONLY half that runs, so it must not be gated too."""
+        """RETARGETED (per-species purifications): the save's Shadow status table is what covers the Purify Chamber
+        and a purification from before the client connected, and it is read ungated."""
         start = CLIENT_SOURCE.index("async def check_purifications")
-        end = CLIENT_SOURCE.index("\nasync def ", start + 1)
+        end = CLIENT_SOURCE.index("\ndef ", start + 1)
         body = CLIENT_SOURCE[start:end]
-        self.assertLess(body.index("ctx.purification_tracker.poll("), body.index("scan_shadow_records"))
-        self.assertEqual(1, body.count("if _looks_ingame():"),
-                         "exactly one gate in this function, and it is the one above the correlation")
+        self.assertIn("read_shadow_monitor", body)
 
     def test_the_catch_scan_reads_the_live_records_first(self):
         start = CLIENT_SOURCE.index("async def check_species_catches")

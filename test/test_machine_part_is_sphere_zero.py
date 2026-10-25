@@ -24,7 +24,7 @@ from __future__ import annotations
 from BaseClasses import CollectionState
 
 from . import PokemonXDTestBase
-from .. import items
+from .. import items, locations
 
 
 class _MachinePartIsReachableImmediately:
@@ -57,7 +57,9 @@ class _MachinePartIsReachableImmediately:
         Machine Part outright. Now it needs Agate Village (the Purify Chamber), which needs the Part only with travel
         shuffle off."""
         part = items.requirement_to_pool_item("Machine Part")
-        first = self.multiworld.get_location("Purify 1 Shadow Pokemon", self.player)
+        # RETARGETED (per-species purifications): the first picked purification, snaggable from the start.
+        dex = self.multiworld.worlds[self.player]._purification_progression_dex[0]
+        first = self.multiworld.get_location(locations.purification_location_name(dex), self.player)
         without = CollectionState(self.multiworld)
         for item in self.multiworld.itempool:
             if item.player == self.player and item.name != part and item.advancement:

@@ -100,40 +100,8 @@ class TestFillerWeights(unittest.TestCase):
 # REGION MODELS BEHIND THE NEW NON-EXCLUDED CATEGORIES
 # ============================================================================================================
 class TestSphereWeightTables(unittest.TestCase):
-    def test_purification_weights_come_from_the_real_83_shadow_roster(self) -> None:
-        # ADDENDUM 415: the census ladder is the vanilla 83; thresholds past it are gated per seed.
-        self.assertEqual(sum(rules._PURIFICATION_WEIGHT_BY_REGION.values()), locations.VANILLA_SHADOW_COUNT)
-
-    def test_a_region_with_no_shadows_and_no_clamped_ones_carries_no_weight(self) -> None:
-        """RETARGETED AGAIN 2026-09-14 (ADDENDUM 184: you can purify in Agate Village). This used to
-        assert Agate Village carried zero, on the grounds that no vanilla shadow is snagged there. That was the
-        wrong question: the ladder counts where a shadow can be PURIFIED, and everything snagged before Agate
-        can only be purified once Agate is reachable. So Agate now absorbs the seven thresholds that used to
-        sit in the always-open regions, and Mt. Battle -- which has no shadows and is past the floor -- is the
-        case this assertion is really about.
-
-        The older retargeting note still applies: the table is a census, so a region with no weight is ABSENT
-        rather than present-and-zero, and there are no tombstones."""
-        self.assertEqual(rules._PURIFICATION_WEIGHT_BY_REGION.get("Mt. Battle", 0), 0)
-        self.assertNotIn("_retired Relic Forest", rules._PURIFICATION_WEIGHT_BY_REGION)
-        # RETARGETED BY ADDENDUM 432: 7 -> 3. Four of the seven were never snaggable before Agate -- Zook's Zangoose
-        # (his Gateon fight cannot be snagged from) and Ardos's three (carried only by his Citadark fight) were filed
-        # at Gateon Port by their trainers' NAME. By carrying row, three remain: the intro's and the HQ Lab's.
-        self.assertEqual(rules._PURIFICATION_WEIGHT_BY_REGION.get("Agate Village", 0), 3,
-                         "the pre-Agate shadows should have been clamped here, not dropped")
-
-    def test_the_purification_ladder_starts_at_the_first_place_that_can_purify(self) -> None:
-        """REWRITTEN 2026-09-14 (ADDENDUM 184). The first vanilla shadow really is in the HQ Lab (Teddiursa,
-        from Spy Naps in the intro) and that has not changed -- but snagging it is not purifying it. Threshold
-        1 is now gated on Agate Village, which is what ADDENDUM 182's F2 was: a seed put the Machine Part on
-        "Purify 2 Shadow Pokemon", and the Machine Part is the key to Agate Village."""
-        from ..game_data import shadow_regions
-
-        first_region, _species = shadow_regions.shadow_regions_in_graph_order()[0]
-        self.assertEqual(first_region, "Pokemon HQ Lab", "where it is SNAGGED is unchanged")
-        thresholds = rules._cumulative_region_thresholds(rules._PURIFICATION_WEIGHT_BY_REGION)
-        self.assertEqual(rules._region_for_sphere_count(thresholds, 1),
-                         shadow_regions.PURIFICATION_FLOOR_REGION)
+    # REMOVED (per-species purifications): the three `_PURIFICATION_WEIGHT_BY_REGION` tests. Each purification is
+    # its own check now, gated on the fights carrying its species (test_addendum_432), so there is no ladder table.
 
     def test_every_weight_table_key_is_a_real_region_or_explicitly_retired(self) -> None:
         """NEW 2026-09-13 (ADDENDUM 169) -- the invariant whose absence caused the bug this addendum fixed.
@@ -152,7 +120,6 @@ class TestSphereWeightTables(unittest.TestCase):
         tables = {
             "_TRAINER_WEIGHT_BY_REGION": rules._TRAINER_WEIGHT_BY_REGION,
             "_UNIQUE_TRAINER_WEIGHT_BY_REGION": rules._UNIQUE_TRAINER_WEIGHT_BY_REGION,
-            "_PURIFICATION_WEIGHT_BY_REGION": rules._PURIFICATION_WEIGHT_BY_REGION,
         }
         for table_name, table in tables.items():
             for key, weight in table.items():
@@ -173,8 +140,6 @@ class TestSphereWeightTables(unittest.TestCase):
                                           locations.TRAINER_DEFEAT_COUNT_LOCATION_COUNT),
             "_UNIQUE_TRAINER_WEIGHT_BY_REGION": (rules._UNIQUE_TRAINER_WEIGHT_BY_REGION,
                                                  locations.TRAINER_DEFEAT_COUNT_LOCATION_COUNT),
-            "_PURIFICATION_WEIGHT_BY_REGION": (rules._PURIFICATION_WEIGHT_BY_REGION,
-                                               locations.VANILLA_SHADOW_COUNT),   # ADDENDUM 415
         }
         for table_name, (table, real_count) in expected.items():
             walk = rules._cumulative_region_thresholds(table)
@@ -261,6 +226,15 @@ class _ScopeBase(PokemonXDTestBase):
     def assert_excluded(self, name: str) -> None:
         self.assertEqual(self.progress_type(name), LocationProgressType.EXCLUDED, name)
 
+    def purifications(self) -> "dict[int, str]":
+        """RETARGETED (per-species purifications): dex -> this seed's `Purify - X` names."""
+        return {locations.PURIFICATION_LOCATION_TO_DEX[loc.name]: loc.name
+                for loc in self.multiworld.get_locations(self.player)
+                if loc.name in locations.PURIFICATION_LOCATION_TO_DEX}
+
+    def picked(self) -> "list[int]":
+        return list(self.multiworld.worlds[self.player]._purification_progression_dex)
+
 
 class TestEverything(_ScopeBase):
     """The default."""
@@ -299,7 +273,7 @@ class TestEverything(_ScopeBase):
         self.assert_default(locations.trainer_defeat_count_location_name(1))
 
     def test_purifications_can_hold_progression(self) -> None:
-        self.assert_default(locations.purification_location_name(1))
+        self.assert_default(locations.purification_location_name(self.picked()[0]))
 
     def test_species_catches_can_hold_progression_only_with_their_own_toggle_on(self) -> None:
         """NARROWED 2026-09-14 (ADDENDUM 185). `progression_locations: everything` used to be enough to open
@@ -364,7 +338,8 @@ class TestWorldChecks(_ScopeBase):
     def test_chests_and_trainers_open_but_purifications_stay_shut(self) -> None:
         self.assert_default(EARLIEST_CHEST)
         self.assert_default(locations.trainer_defeat_count_location_name(1))
-        self.assert_excluded(locations.purification_location_name(1))
+        for name in self.purifications().values():
+            self.assert_excluded(name)
 
 
 # REMOVED 2026-09-15 (ADDENDUM 237): TestOverworldOnly pinned `progression_locations: 0`, the setting that
@@ -387,9 +362,10 @@ class TestSpheresAreRealNotFlat(_ScopeBase):
         self.assertFalse(self.can_reach_location(DEEPEST_CHEST))
 
     def test_the_last_purification_is_not_reachable_from_the_start(self) -> None:
-        # ADDENDUM 479: this seed's own last rung (the post-goal Shadows have none).
-        last = self.multiworld.worlds[self.player]._purification_location_count
-        self.assertFalse(self.can_reach_location(locations.purification_location_name(last)))
+        # RETARGETED (per-species purifications): none is -- the Purify Chamber is behind the Machine Part.
+        self.assertTrue(self.purifications())
+        for name in self.purifications().values():
+            self.assertFalse(self.can_reach_location(name), name)
 
 
 if __name__ == "__main__":
@@ -412,20 +388,22 @@ class TestPurificationProgressionCap(_ScopeBase):
         "purification_progression_cap": 12,
     }
 
+    # RETARGETED (per-species purifications): the cap picks WHICH Shadows, per seed, rather than the lowest rungs.
     def test_thresholds_at_or_below_the_cap_can_hold_progression(self) -> None:
-        for count in (1, 6, 12):
-            self.assert_default(locations.purification_location_name(count))
+        self.assertEqual(12, len(self.picked()))
+        for dex in self.picked():
+            self.assert_default(locations.purification_location_name(dex))
 
     def test_thresholds_above_the_cap_are_filler_only(self) -> None:
-        for count in (13, 24, self.multiworld.worlds[self.player]._purification_location_count):   # ADDENDUM 479
-            self.assert_excluded(locations.purification_location_name(count))
+        for dex, name in self.purifications().items():
+            if dex not in self.picked():
+                self.assert_excluded(name)
 
     def test_the_locations_still_exist_and_still_send(self) -> None:
-        """Capped means "no progression or useful item", not "removed" -- crossing the threshold still fires."""
-        all_names = {loc.name for loc in self.multiworld.get_locations(self.player)}
-        last = self.multiworld.worlds[self.player]._purification_location_count   # ADDENDUM 479
-        for count in range(1, last + 1):
-            self.assertIn(locations.purification_location_name(count), all_names)
+        """Capped means "no progression or useful item", not "removed" -- purifying still fires."""
+        world = self.multiworld.worlds[self.player]
+        self.assertEqual(sorted(world._purifiable_shadow_dex), sorted(self.purifications()))
+        self.assertEqual(world._purification_location_count, len(self.purifications()))
 
     def test_it_does_not_touch_the_other_categories(self) -> None:
         self.assert_default(EARLIEST_CHEST)
@@ -442,8 +420,9 @@ class TestPurificationCapAtZero(_ScopeBase):
     }
 
     def test_no_purification_check_is_load_bearing(self) -> None:
-        for count in (1, self.multiworld.worlds[self.player]._purification_location_count):   # ADDENDUM 479
-            self.assert_excluded(locations.purification_location_name(count))
+        self.assertEqual([], self.picked())
+        for name in self.purifications().values():
+            self.assert_excluded(name)
 
 
 class TestPurificationCapAtMaximum(_ScopeBase):
@@ -456,8 +435,8 @@ class TestPurificationCapAtMaximum(_ScopeBase):
     }
 
     def test_every_threshold_is_eligible_again(self) -> None:
-        for count in (1, 16, 32, locations.VANILLA_SHADOW_COUNT):
-            self.assert_default(locations.purification_location_name(count))
+        for name in self.purifications().values():
+            self.assert_default(name)
 
 
 # REMOVED 2026-10-09 (ADDENDUM 449): TestPurificationCapIsMootWhenNothingIsEligible set `progression_locations:

@@ -46,8 +46,6 @@ class TestPurificationFloor(unittest.TestCase):
         """rules.py asserts this at import; clamping regions must move thresholds, never drop them."""
         weights = shadow_regions.purification_weights(locations.VANILLA_SHADOW_COUNT)
         self.assertEqual(sum(weights.values()), locations.VANILLA_SHADOW_COUNT)
-        self.assertEqual(sum(rules._PURIFICATION_WEIGHT_BY_REGION.values()),
-                         locations.VANILLA_SHADOW_COUNT)
 
 
 class TestPurificationFloorInAWorld(PokemonXDTestBase):
@@ -55,8 +53,10 @@ class TestPurificationFloorInAWorld(PokemonXDTestBase):
 
     def test_the_first_threshold_is_closed_until_agate_village_is_reachable(self) -> None:
         """The seed that motivated this put the Machine Part on 'Purify 2 Shadow Pokemon' -- and the Machine
-        Part is the key to Agate Village."""
-        first = self.multiworld.get_location(locations.purification_location_name(1), self.player)
+        Part is the key to Agate Village. RETARGETED (per-species purifications): the first picked purification,
+        whose Shadow can be snagged from the start, so Agate Village is all it waits on."""
+        dex = self.multiworld.worlds[self.player]._purification_progression_dex[0]
+        first = self.multiworld.get_location(locations.purification_location_name(dex), self.player)
         self.assertFalse(first.can_reach(self.multiworld.state))
         self.collect_key_item_chain(1)  # Machine Part -> Agate Village
         self.assertTrue(self.multiworld.state.can_reach("Agate Village", player=self.player))

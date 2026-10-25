@@ -20,7 +20,8 @@ An Archipelago world for the GameCube game *Pokemon XD: Gale of Darkness* (USA, 
   depending on the mode you pick. With Exclude Mt. Battle Trainers off, each Mt. Battle trainer is a check too.
 - **Shadow Pokemon catches** — vanilla roster, plus up to 44 more if you turn on Shadow
   Pokemon Expansion.
-- **Purifications** — "Purify 1 Shadow Pokemon" through "Purify X".
+- **Purifications** — one "Purify - {species}" per Shadow Pokemon; with Purification Unlocks on, each Shadow
+  needs its "Purification Unlock - {species}" item before it can be purified.
 - **Species catches** — one per entry, 1–386.
 - **Shop purchases** — every shop slot becomes its own check when Randomize Shops is on.
 - **Travel unlocks** — 11 fast-travel destinations become items when Location Shuffle is on.

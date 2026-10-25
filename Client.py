@@ -4,7 +4,7 @@ Pokemon XD: Gale of Darkness -- Archipelago client.
 Built on ram_client.py (Dolphin memory access: hooking, block-base resolution, Bag pocket read/write,
 party/species detection, purification detection) and shadow_species.py.
 
-Detected live with no ISO patch: "Catch - {species}" (386), "Purify N Shadow Pokemon" (32),
+Detected live with no ISO patch: "Catch - {species}" (386), "Purify - {species}" (one per Shadow species),
 "Defeat - {trainer}" (66), "Defeat N Trainers" (232), and the seed's Goal. Catches read the save-resident
 `Pokemon` records (BLOCK_BASE - 0x10 + i * 0xC4, what `heroBiosGetPokemonPtr` returns), valid as soon as the
 save block resolves, by numeric species field so nicknames count; PARTY_BASE is only a second witness, being a
@@ -43,6 +43,7 @@ from NetUtils import ClientStatus
 
 from . import ap_patch, fst_guard, items, ram_client, shop_scout, species, trainer_defeat, travel_locations
 from .game_data import story_bytes, trainer_roster
+from .game_data.shadow_engine import VANILLA_DARK_POKEMON_LIST
 from .game_data.mtbattle_trainer_data import (
     MT_BATTLE_FINAL_TRAINER_SURNAME,
     MT_BATTLE_FINAL_TRAINER_SURNAMES,
@@ -59,6 +60,7 @@ from .locations import (
     TRAINER_DEFEAT_COUNT_LOCATION_COUNT,
     TRAINER_DEFEAT_COUNT_LOCATION_NAME_SET,
     get_location_name_to_id,
+    purification_location_name,
     trainer_defeat_count_location_name,
 )
 
@@ -893,10 +895,10 @@ class PokemonXDCommandProcessor(ClientCommandProcessor):
                                                 for tab, slot, item_id, qty in misfiled) or "none"))
 
     def _cmd_purifications(self) -> None:
-        """DEBUG: Shows purification scans/rejections."""
+        """DEBUG: Shows purified Shadows and the purification unlocks written to the game."""
         if not isinstance(self.ctx, PokemonXDContext):
             return
-        for line in self.ctx.purification_tracker.describe():
+        for line in describe_purifications(self.ctx):
             logger.info(line)
 
     def _cmd_storywatch(self, state: str = "") -> None:
@@ -1241,7 +1243,15 @@ class PokemonXDContext(CommonContext):
         self._block_churn_logged = False
         # Species newly seen this session (party + optionally PC box) -- feeds "Catch - X" only.
         self.seen_dex_numbers: set[int] = self.species_catch_tracker.seen
-        self.purification_tracker = ram_client.PurificationCountTracker()
+        # Shadow id -> National Dex and back, off main.dol's Shadow list (`ap_patch.read_dark_pokemon_list`).
+        self.shadow_ids_by_dex: "dict[int, tuple[int, ...]]" = {}
+        self.shadow_dex_by_id: "dict[int, int]" = {}
+        # The save's Shadow status table's purified ids on the previous poll; an id counts once two polls agree.
+        self._shadow_monitor_purified_last: "set[int]" = set()
+        self.purified_shadow_ids: "set[int]" = set()
+        # What `give.purified` was last written as, for `/purifications` and the one log line per change.
+        self.purification_unlock_ids_written: "tuple[int, ...] | None" = None
+        self._shadow_list_warned = False
         self.chest_tracker = ram_client.ChestFlagTracker()
         # Same role as chest_tracker, over a separate set of dummy berry ids (26, since Enigma Berry came out).
         self.shop_tracker = ram_client.ShopPurchaseTracker()
@@ -1274,6 +1284,8 @@ class PokemonXDContext(CommonContext):
         self.randomize_shops: bool = False
         # ADDENDUM 415. True until slot data says otherwise: a seed generated before the option existed had them.
         self.purification_checks: bool = True
+        # Purification Unlocks: the patch blocks every purification not listed in `give.purified`.
+        self.purification_unlocks: bool = False
         # {shop location name: (AP item name, receiving player name or None for ours)}, from the LocationScouts
         # reply. Read ONLY by the cosmetic description writer -- see on_package's LocationInfo branch for why.
         self.scouted_shop_items: "dict[str, tuple[str, str | None]]" = {}
@@ -1346,7 +1358,6 @@ class PokemonXDContext(CommonContext):
         self.pokespot_dex: "set[int]" = set()
         self.starter_line_dex: "set[int]" = set()   # ADDENDUM 443
         self.starter_dex: int = STARTER_DEX_DEFAULT
-        self._last_purification_scan: float = 0.0
         # Ids a detector named that this seed does not contain. Reported once each, then held.
         self._locations_not_in_seed: "set[int]" = set()
         # Checks detected but not yet confirmed by the server. Re-sent on reconnect and every
@@ -1649,6 +1660,7 @@ class PokemonXDContext(CommonContext):
             self.map_level_text.levels = {str(k): int(v) for k, v in dict(slot_data.get("map_place_levels") or {}).items()}
             self.exclude_mt_battle_trainers = bool(slot_data.get("exclude_mt_battle_trainers", False))
             self.purification_checks = bool(slot_data.get("purification_checks", True))   # ADDENDUM 415
+            self.purification_unlocks = bool(slot_data.get("purification_unlocks", False))
             self.robo_kyogre_parts_required = int(slot_data.get("robo_kyogre_parts_required", 0) or 0)
             self.robo_kyogre_parts_unlock_citadark = bool(
                 slot_data.get("robo_kyogre_parts_unlock_citadark", False)
@@ -1988,10 +2000,6 @@ class PokemonXDContext(CommonContext):
                 self.pending_check_ids = {int(i) for i in slot_state.get("pending_checks", [])}
                 _anim = slot_state.get("animations_override")
                 self.animations_override = None if _anim is None else bool(_anim)
-                # The purified-species ledger records what the game cannot be re-read for: a species purified in
-                # an earlier session leaves a flag that looks brand new to a fresh client.
-                if "purification" in slot_state:
-                    self.purification_tracker.load_json(slot_state["purification"])
                 # Same shape, same failure if missing: a defeat check fires on the Nth DISTINCT team and the game
                 # records none of them, so a client that restarts without this reads every rematch as a first win.
                 if "patch_trainer_defeats" in slot_state:
@@ -2042,7 +2050,6 @@ class PokemonXDContext(CommonContext):
             "death_link_override": getattr(self, "death_link_override", None),   # ADDENDUM 477
             "pending_checks": sorted(getattr(self, "pending_check_ids", ()) or ()),
             "animations_override": getattr(self, "animations_override", None),
-            "purification": self.purification_tracker.to_json(),
             "patch_trainer_defeats": self.trainer_defeat_tracker.to_json(),
             # The value the Gateon ceiling is holding back, or None -- the only write this client makes that can
             # lose progress. Restore-on-leave does not cover the client being killed inside Gateon; this does.
@@ -2079,7 +2086,7 @@ TRAP_ITEM_NAMES = {"Itemfinder Malfunction Trap"}
 
 # Neither effect item is a Bag item; both are a currency write into the save block, four bytes apart.
 # Everything else in `ITEM_TABLE` routes to a pocket and confirms a quantity, and these cannot.
-EFFECT_ITEM_NAMES = TRAP_ITEM_NAMES | {items.POKECOUPON_ITEM_NAME}
+EFFECT_ITEM_NAMES = TRAP_ITEM_NAMES | {items.POKECOUPON_ITEM_NAME} | set(items.PURIFICATION_UNLOCK_NAME_TO_DEX)
 
 
 def _apply_pokecoupon_item(ctx: PokemonXDContext, item_name: str) -> None:
@@ -2103,6 +2110,9 @@ def _apply_effect_item(ctx: PokemonXDContext, item_name: str) -> None:
         _apply_trap_effect(ctx, item_name)
     elif item_name == items.POKECOUPON_ITEM_NAME:
         _apply_pokecoupon_item(ctx, item_name)
+    elif item_name in items.PURIFICATION_UNLOCK_NAME_TO_DEX:
+        # Nothing to write here: `sync_purification_unlocks` keeps the whole received set in the patch's list.
+        logger.info(f"Received {item_name} -- that Shadow Pokemon can now be purified.")
 
 
 def _apply_trap_effect(ctx: PokemonXDContext, item_name: str) -> None:
@@ -2713,73 +2723,104 @@ async def check_shadow_monitor_catches(ctx: PokemonXDContext) -> None:
 
 
 async def check_purifications(ctx: PokemonXDContext) -> None:
-    if ctx.block_base is None:
+    """"Purify - {species}" for every Shadow id the game has purified: the AP patch's log of this boot's purifications,
+    and the save's Shadow status table for everything before it (two agreeing reads, like the snag table). The id's
+    species is this seed's own, off main.dol's Shadow list, so a randomized or expansion Shadow names its real species.
+
+    The whole set is offered every poll; `_send_checks` announces only what the server has not acknowledged."""
+    purified: "set[int]" = set(ctx.ap_patch_block.purified) if ctx.ap_patch_block is not None else set()
+    if ctx.block_base is not None:
+        monitor = ram_client.read_shadow_monitor(ctx.block_base)
+        if monitor is not None:
+            purified |= monitor & ctx._shadow_monitor_purified_last
+            ctx._shadow_monitor_purified_last = monitor
+    ctx.purified_shadow_ids |= purified
+    # ADDENDUM 415: with "Purification Checks" off nothing is sent.
+    if not ctx.purification_checks or not ctx.purified_shadow_ids:
         return
-    # A Pokemon does not become purified mid-fight, and a battle is when PARTY_BASE and the recap records are least
-    # trustworthy. The tracker holds its baselines while skipping, so this delays a check, never drops one.
+    seed_ids = seed_location_ids(ctx)
+    names: "list[str]" = []
+    for shadow_id in sorted(ctx.purified_shadow_ids):
+        dex = ctx.shadow_dex_by_id.get(shadow_id)
+        if dex is None:
+            continue
+        name = purification_location_name(dex)
+        location_id = LOCATION_NAME_TO_ID.get(name)
+        if location_id is None or location_id in ctx.checked_locations or (seed_ids and location_id not in seed_ids):
+            continue   # a post-goal Shadow has no check
+        names.append(name)
+    if names:
+        await _send_checks(ctx, names)
+
+
+def received_purification_unlock_dex(ctx: PokemonXDContext) -> "set[int]":
+    """National Dex numbers of every Purification Unlock the multiworld has sent this slot. Counted straight off
+    `items_received`, like the Robo Kyogre Parts: the unlocks have no Bag item, so the received list is where they
+    live."""
+    out: "set[int]" = set()
+    for network_item in ctx.items_received:
+        dex = items.PURIFICATION_UNLOCK_NAME_TO_DEX.get(ITEM_ID_TO_NAME.get(network_item.item, ""))
+        if dex is not None:
+            out.add(dex)
+    return out
+
+
+def refresh_shadow_ids(ctx: PokemonXDContext) -> None:
+    """Re-read main.dol's Shadow list. Kept from the last good read when this one does not read as the list."""
     try:
-        in_battle = ram_client.read_battle_ui_flag() == 1
+        listing = ap_patch.read_dark_pokemon_list()
     except Exception:
-        in_battle = False
-    # The `_looks_ingame()` gate wraps this ONE call, not the function: `PurificationTracker.poll` correlates the
-    # recap array against PARTY_BASE, and that has never been confirmed safe against an all-zero PARTY_BASE.
-    # Everything else here reads save data. The state scan below covers what this watcher cannot see anyway.
-    newly_crossed: "list[str]" = []
-    if _looks_ingame():
-        newly_crossed = ctx.purification_tracker.poll(
-            ctx.block_base, ram_client.PARTY_BASE, in_battle=in_battle
-        )
-    # The party/PC state scan, alongside the flip-watcher above. That watcher has to SEE the flag flip in a party
-    # slot; the Purify Chamber hands the Pokemon back to the PC, and a purification from before this client
-    # connected never flips at all. This reads the STATE of every party and PC record instead, on the box cadence
-    # rather than every poll: 360 record reads.
-    if not in_battle and time.monotonic() - ctx._last_purification_scan >= BOX_SCAN_MIN_INTERVAL:
-        ctx._last_purification_scan = time.monotonic()
-        try:
-            records = ram_client.scan_shadow_records(
-                ctx.block_base,
-                box_slots=list(range(ram_client.PC_BOX_SCAN_COUNT * ram_client.PC_BOX_SLOTS_PER_BOX)),
-            )
-            _shadow_dex = ctx.seed_shadow_dex()
-            newly_crossed = list(newly_crossed) + ctx.purification_tracker.observe_records(
-                records,
-                seed_shadow_dex=_shadow_dex,
-                # Species this seed hands out WITHOUT a purification -- the guaranteed Eevee and its
-                # evolutions, and this seed's Poke Spot species. Rule 2 must not fire on one.
-                obtainable_elsewhere_dex=ctx.obtainable_without_purifying(),
-                # The species the CATCH scan has seen the player own. Rule 2 infers ownership, so it leans on the
-                # one scan already hardened against a bad box poll rather than trusting a single record.
-                trusted_owned_dex=set(getattr(ctx.species_catch_tracker, "seen", None) or ()),
-                # One Shadow can be purified once, so the seed's Shadow count is a real ceiling. `None` when the
-                # seed did not say, leaving the PURIFICATION_LOCATION_COUNT cap as the only one.
-                shadow_count_cap=len(_shadow_dex) or None,
-            )
-            # The save's own Shadow status table: it also sees a Shadow purified in the chamber and moved on, or
-            # before this client connected. Same id ledger, so nothing is counted twice.
-            monitor_ids = ram_client.read_shadow_monitor(ctx.block_base)
-            if monitor_ids:
-                newly_crossed = list(newly_crossed) + ctx.purification_tracker.observe_monitor(
-                    monitor_ids, shadow_count_cap=len(_shadow_dex) or None)
-            # Say WHICH record caused each count -- a count printed only as a location name cannot be traced
-            # when two checks arrive for one purification.
-            for line in ctx.purification_tracker.last_counts:
-                _note(ctx, f"Purification counted from {line}")
-            # ADDENDUM 407: a PID the game changed at purification (the Unown letter case). Loud, because it is
-            # the evidence that case needs and it happens once per Shadow at most.
-            for line in ctx.purification_tracker.new_pid_changes:
-                _note_warn(ctx, f"Purification changed this Pokemon's PID -- {line}. Please report it with "
-                                "`/purifications`.")
-        except Exception:
-            logger.debug("Pokemon XD: purification scan failed this poll", exc_info=True)
-    # ADDENDUM 415: with "Purification Checks" off the count is still kept (it is the ledger that stops a
-    # double-count if the setting were ever read differently), but nothing is sent.
-    if newly_crossed and ctx.purification_checks:
-        await _send_checks(ctx, newly_crossed)
-    # Persist the species ledger the moment it changes, not on a timer: it records which species have already
-    # been counted, and losing the last few seconds of that is the duplicate it exists to stop.
-    if ctx.purification_tracker.dirty:
-        ctx.purification_tracker.dirty = False
-        ctx._save_local_state()
+        listing = None
+    if listing is None:
+        return
+    # The ISO patcher never fails a whole patch over this list, so a randomized seed can still be on a vanilla one --
+    # and then every id resolves to the wrong species. Said once; nothing here can repair it.
+    if (ctx.randomize_shadow_species and not ctx._shadow_list_warned
+            and listing[1:84] == VANILLA_DARK_POKEMON_LIST[1:84]):
+        ctx._shadow_list_warned = True
+        logger.warning("This ISO's Shadow list still names the vanilla species, but this seed randomizes them -- "
+                       "purification checks and unlocks will name the wrong Pokemon. Re-patch the ISO.")
+    ctx.shadow_ids_by_dex = ap_patch.shadow_ids_by_dex(listing)
+    ctx.shadow_dex_by_id = {shadow_id: dex for dex, ids in ctx.shadow_ids_by_dex.items() for shadow_id in ids}
+
+
+def sync_purification_unlocks(ctx: PokemonXDContext) -> None:
+    """Keeps the patch's `give.purified` list equal to every Shadow id of every species whose unlock has been
+    received. The block is plain RAM -- a power cycle empties it, a save state from before an unlock rolls it back --
+    so it is compared every poll and rewritten whole whenever it differs. It is in the block, not the save, so this
+    runs from boot, before any save is loaded."""
+    if not ctx.purification_unlocks:
+        return
+    wanted = tuple(sorted({shadow_id for dex in received_purification_unlock_dex(ctx)
+                           for shadow_id in ctx.shadow_ids_by_dex.get(dex, ())}))
+    current = ap_patch.read_give_purified()
+    if current is not None and tuple(sorted(current)) == wanted:
+        ctx.purification_unlock_ids_written = wanted
+        return
+    ap_patch.write_give_purified(wanted)
+    if ctx.purification_unlock_ids_written != wanted:
+        _note(ctx, f"Purification unlocks written to the game: {len(wanted)} Shadow id(s).")
+    ctx.purification_unlock_ids_written = wanted
+
+
+def describe_purifications(ctx: PokemonXDContext) -> "list[str]":
+    def label(dex: "int | None") -> str:
+        return species.NATIONAL_DEX.get(dex, "?") if dex is not None else "?"
+
+    lines = [f"Shadow list: {len(ctx.shadow_dex_by_id)} Shadow id(s) resolved to a species"
+             + ("" if ctx.shadow_dex_by_id else " -- main.dol's list has not read yet") + "."]
+    purified = sorted(ctx.purified_shadow_ids)
+    lines.append(f"Purified: {len(purified)}" + (": " + ", ".join(
+        f"#{shadow_id} {label(ctx.shadow_dex_by_id.get(shadow_id))}" for shadow_id in purified) if purified else "."))
+    if not ctx.purification_unlocks:
+        lines.append("Purification Unlocks are off for this seed -- every Shadow can be purified.")
+        return lines
+    unlocked = sorted(received_purification_unlock_dex(ctx))
+    lines.append(f"Unlocks received: {len(unlocked)}" + (": " + ", ".join(label(dex) for dex in unlocked)
+                                                         if unlocked else "."))
+    written = ctx.purification_unlock_ids_written
+    lines.append("Written to the game: " + ("nothing yet." if written is None else f"{len(written)} Shadow id(s)."))
+    return lines
 
 
 def robo_kyogre_parts_held(ctx: PokemonXDContext) -> int:
@@ -3912,9 +3953,9 @@ def sync_ap_patch(ctx: PokemonXDContext) -> None:
     """Reads the AP patch's block for this tick's checks, and keeps the patch's feature flags written.
 
     The flags are rewritten whenever they read differently -- the block is plain RAM, so a power cycle zeroes it.
-    Two bits stay off on purpose: with POKEMON_CHECKS the patch withholds every capture, and with PURIFY_CHECKS it
-    blocks every purification, each until the client hands it back through the block's `give` half, which this
-    client does not do yet."""
+    POKEMON_CHECKS stays off on purpose: the patch would withhold every capture until the client hands it back
+    through the block's `give` half, which this client does not do yet. PURIFY_CHECKS follows Purification Unlocks;
+    the unlocked Shadow ids go into `give.purified` first, so the patch never sees the flag without its list."""
     try:
         block = ap_patch.read_block()
     except Exception:
@@ -3931,10 +3972,12 @@ def sync_ap_patch(ctx: PokemonXDContext) -> None:
     flags = ap_patch.feature_flags(
         item_checks=ctx.randomize_chests,
         pokemon_checks=False,
-        purify_checks=False,
+        purify_checks=ctx.purification_unlocks,
         death_link=ctx.death_link_bridge.enabled,
     )
     try:
+        refresh_shadow_ids(ctx)
+        sync_purification_unlocks(ctx)
         if block.flags != flags:
             ap_patch.write_flags(flags)
         pending = block.death_link != 0

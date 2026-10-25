@@ -334,7 +334,7 @@ class PokemonXDWorld(World):
                 _vanilla_shadow_count = _counted
         except Exception:  # noqa: BLE001 -- a missing census must not take generation down over a bound check
             pass
-        # Read by rules.py: where the vanilla purification ladder ends and the expansion's begins.
+        # The vanilla Shadows still at their own holders and purifiable before the goal; bounds the cap below.
         self._vanilla_shadow_count = _vanilla_shadow_count
         # ADDENDUM 424: Nightmare Citadark's relocated Shadows still exist, one each, on new holders.
         _relocated_count = len(self._nightmare_removed_dpkm)
@@ -701,11 +701,15 @@ class PokemonXDWorld(World):
                         {"dex": int(_dex), "species": _species, "name": str(_name).title() if _name else f"#{_dex}",
                          "ddpk": _relocated_ddpk_by_dex.get(int(_dex))})
 
-        # ADDENDUM 415: one `Purify N` per Shadow this seed REALLY holds -- the vanilla count plus what the expansion
-        # actually placed, which can fall short of the request when hosts run out. create_regions reads this.
-        self._purification_location_count = _vanilla_shadow_count + sum(
-            len(plan["new_pokemon"]) for plan in (self._shadow_expansion_plans or ())
-        ) + sum(len(plan["shadows"]) for plan in self._nightmare_relocations)
+        # Purifications: one `Purify - X` per species a pre-goal Shadow really is this seed, gated on the fights that
+        # carry it (rules.py). Every Shadow species, post-goal ones included, gets a Purification Unlock when that option
+        # is on. Which of them may hold progression is picked in create_regions, once the graph can say what is sphere 1.
+        self._shadow_species_dex: "set[int]" = set(shadow_obtainable_dex)
+        self._purification_gates = rules.purification_gates_by_species(self)
+        self._purifiable_shadow_dex: "set[int]" = set(self._purification_gates)
+        self._purification_progression_dex: "list[int]" = []
+        self._purification_unlock_progression_dex: "set[int]" = set()
+        self._purification_location_count = len(self._purifiable_shadow_dex)
 
         # Poke Spot reassignment (ADDENDUM 43): always on, no toggle. Prefers species the Shadow pool does not
         # already cover, and is cached for the same two readers.
@@ -1193,6 +1197,57 @@ class PokemonXDWorld(World):
 
     def create_regions(self) -> None:
         regions.create_and_connect_regions(self)
+        self._choose_purification_progression()
+
+    def _choose_purification_progression(self) -> None:
+        """Which `Purify - X` checks may hold progression: `purification_progression_cap` of them, the first a Shadow
+        that can be snagged with nothing in hand. With Purification Unlocks on, these are also the Shadows whose
+        unlocks are progression -- always at least the first, even at a cap of 0 -- and that first unlock is placed
+        early in this world.
+
+        Here rather than in generate_early because "snaggable from the start" is a question for the region graph,
+        and rather than in rules because create_items reads the progress types this sets."""
+        from BaseClasses import CollectionState
+
+        purifiable = sorted(self._purifiable_shadow_dex)
+        if not purifiable:
+            return
+        state = CollectionState(self.multiworld)
+        sphere_one = [dex for dex in purifiable
+                      if rules.purification_way_is_open(state, self.player, self._purification_gates[dex])]
+        if not sphere_one:
+            logging.warning("Pokemon XD (player %s): no Shadow can be snagged from the start; the first progression "
+                            "purification is any pre-goal Shadow instead.", self.player_name)
+            sphere_one = purifiable
+        first = self.random.choice(sphere_one)
+        rest = [dex for dex in purifiable if dex != first]
+        self.random.shuffle(rest)
+        chosen = [first] + rest
+        cap = min(int(self.options.purification_progression_cap), len(chosen))
+        self._purification_progression_dex = chosen[:cap]
+        if bool(self.options.purification_unlocks):
+            self._purification_unlock_progression_dex = set(chosen[:max(1, cap)])
+            self.multiworld.local_early_items[self.player][items.purification_unlock_item_name(first)] = 1
+
+        # locations.py made every purification filler-only; open the ones picked.
+        picked = set(self._purification_progression_dex)
+        for location in self.multiworld.get_locations(self.player):
+            if locations.PURIFICATION_LOCATION_TO_DEX.get(location.name) in picked:
+                location.progress_type = LocationProgressType.DEFAULT
+
+    def _purification_unlock_classification(self, dex: int) -> ItemClassification:
+        if dex in self._purification_unlock_progression_dex:
+            return ItemClassification.progression
+        if dex in self._purifiable_shadow_dex:
+            return ItemClassification.useful
+        return ItemClassification.filler   # a Shadow with no purification check: only met after the goal
+
+    def _purification_unlock_items(self) -> "list[PokemonXDItem]":
+        """One unlock per Shadow species this seed holds, with Purification Unlocks on."""
+        if not bool(self.options.purification_unlocks):
+            return []
+        return [self.create_item(items.purification_unlock_item_name(dex))
+                for dex in sorted(self._shadow_species_dex) if dex in species.NATIONAL_DEX]
 
     def create_items(self) -> None:
         item_pool: list[PokemonXDItem] = []
@@ -1234,6 +1289,8 @@ class PokemonXDWorld(World):
                 if name in items.OPTION_GATED_PROGRESSION_ITEMS and not shuffle_scooter_upgrade:
                     continue
                 item_pool.append(self.create_item(name))
+        unlocks = self._purification_unlock_items()
+        item_pool += [item for item in unlocks if item.advancement]
         # ADDENDUM 483 (issue #5): the Master Ball, once, as a useful item. It used to ride the progression pass.
         for name in items.GUARANTEED_USEFUL_ITEM_NAMES:
             if name not in items.ITEMS_REMOVED_FROM_POOL:
@@ -1257,6 +1314,16 @@ class PokemonXDWorld(World):
         if len(item_pool) > default_capacity:
             raise OptionError(_capacity_refusal(self, len(item_pool), default_capacity))
 
+        # Purification Unlocks take the place of the random useful draws below. One that does not fit a location able
+        # to hold a useful item is placed as filler -- still delivered, and it still unlocks its Shadow.
+        filler_unlocks: "list[PokemonXDItem]" = []
+        for item in unlocks:
+            if item.advancement:
+                continue
+            if item.useful and len(item_pool) >= default_capacity:
+                item.classification = ItemClassification.filler
+            (item_pool if item.useful else filler_unlocks).append(item)
+
         useful_budget = max(0, default_capacity - len(item_pool))
         if useful_budget:
             # ITEMS_REMOVED_FROM_POOL was only checked by the progression pass, so `useful` names slipped in.
@@ -1272,6 +1339,7 @@ class PokemonXDWorld(World):
                 item_pool.append(self.create_item(name))
 
         # The rest is filler, which EXCLUDED locations require one each of; the cap keeps that supply intact.
+        item_pool += filler_unlocks[:max(0, total_locations - len(item_pool))]
         while len(item_pool) < total_locations:
             item_pool.append(self.create_filler())
 
@@ -1305,6 +1373,10 @@ class PokemonXDWorld(World):
         return [item for item in getattr(self, "_story_bound_part_items", None) or () if item.location is None]
 
     def create_item(self, name: str) -> PokemonXDItem:
+        dex = items.PURIFICATION_UNLOCK_NAME_TO_DEX.get(name)
+        if dex is not None:
+            return PokemonXDItem(name, self._purification_unlock_classification(dex), self.item_name_to_id[name],
+                                 self.player)
         return items.create_item(self, name)
 
     def get_filler_item_name(self) -> str:
@@ -1517,7 +1589,8 @@ class PokemonXDWorld(World):
                 "death_link",  # ADDENDUM 351 -- the client turns the DeathLink tag on from this
                 "agate_village_pit_stop",  # ADDENDUM 311 -- the client stops treating Agate's shop as a shop
                 "reduce_citadark_grind",  # ADDENDUM 427 -- the client describes the Candy Box at Gateon
-                "purification_checks",  # ADDENDUM 415 -- off: the client sends no `Purify N`
+                "purification_checks",  # ADDENDUM 415 -- off: the client sends no `Purify - X`
+                "purification_unlocks",  # the client sets the patch's AP_ENABLE_PURIFYCHECKS from this
                 # ADDENDUM 196: both options are gone -- the area memory arms off randomize_travel_locations.
                 "key_item_shuffle",
                 "nightmare_citadark",  # ADDENDUM 423
@@ -1593,9 +1666,10 @@ class PokemonXDWorld(World):
         # ADDENDUM 443: the starter and its line -- the client's "owned without purifying" set.
         slot_data["starter_dex"] = int(self.starter_dex)
         slot_data["starter_line_dex"] = sorted(self.starter_line_dex)
-        # For trackers: how many "Purify N" checks this seed has, and the Data Storage key the client keeps the
-        # current room in ({team} and {slot} filled from the connection).
+        # For trackers: how many "Purify - X" checks this seed has and which may hold progression, and the Data
+        # Storage key the client keeps the current room in ({team} and {slot} filled from the connection).
         slot_data["purification_location_count"] = int(getattr(self, "_purification_location_count", 0) or 0)
+        slot_data["purification_progression_dex"] = sorted(getattr(self, "_purification_progression_dex", None) or ())
         slot_data["room_id_key"] = ROOM_ID_KEY_TEMPLATE
         slot_data["room_area_key"] = ROOM_AREA_KEY_TEMPLATE
         # Missable Trainer Shadows: each missable host's label and the Shadows on it, for the client's hand-off to
@@ -1636,6 +1710,7 @@ class PokemonXDWorld(World):
         half a location name cannot carry; see catch_sources.py. Every trainer-defeat hint names the area(s) it is
         fought in (defeat_hints.py, ADDENDUM 489)."""
         texts = catch_sources.sources_by_location(self)
+        texts.update(catch_sources.purification_sources_by_location(self))
         # ADDENDUM 489: the trainer-defeat checks name where they are fought, the same way.
         from .defeat_hints import defeat_hint_texts
         for name, text in defeat_hint_texts(self).items():

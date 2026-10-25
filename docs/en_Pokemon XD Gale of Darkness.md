@@ -16,9 +16,10 @@ memory -- see the setup guide for what it can and can't do automatically. Severa
 - **Catching a species** -- one check per species you can actually obtain in your seed (its Shadow Pokemon, its
   Poke Spot species and your starter), the first time that species is seen owned, live-detected off the game's
   own memory.
-- **Purifying a Shadow Pokemon** -- Cumulative checks, "Purify 1 Shadow Pokemon" through "Purify X Shadow
-  Pokemon", one per Shadow Pokemon your seed holds that can be had before the goal. Greevil's Shadow Pokemon and
-  Miror B.'s post-game Dragonite have no checks.
+- **Purifying a Shadow Pokemon** -- one "Purify - {species}" check per Shadow Pokemon your seed holds that can be
+  had before the goal, named after the species it really is this seed. Greevil's Shadow Pokemon and Miror B.'s
+  post-game Dragonite have no checks. With Purification Unlocks on, a Shadow Pokemon cannot be purified until its
+  "Purification Unlock - {species}" item has been received.
 - **Shop purchases** -- shelf slots in the shops, when shop randomization is on.
 
 Every check grants an ordinary shuffled item from the multiworld.

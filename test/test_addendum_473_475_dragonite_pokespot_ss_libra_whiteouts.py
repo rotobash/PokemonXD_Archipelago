@@ -45,11 +45,13 @@ class TestTheLastPurificationIsFillerOnly(PokemonXDTestBase):
     options = {"shadow_pokemon_expansion": 0, "purification_progression_cap": 127}
 
     def test_purify_83_is_excluded_and_82_is_not(self) -> None:
-        """RETARGETED BY ADDENDUM 479: the Dragonite's rung is gone, not filler-only -- 75 rungs, none excluded."""
-        names = {loc.name for loc in self.multiworld.get_locations(self.player)}
-        self.assertNotIn(locations.purification_location_name(76), names)
-        last = self.multiworld.get_location(locations.purification_location_name(75), self.player)
-        self.assertNotEqual(LocationProgressType.EXCLUDED, last.progress_type)
+        """RETARGETED BY ADDENDUM 479: the Dragonite's rung is gone, not filler-only -- 75 rungs, none excluded.
+        RETARGETED (per-species purifications): 75 `Purify - X` checks, none excluded at the maximum cap."""
+        purify = [loc for loc in self.multiworld.get_locations(self.player)
+                  if loc.name in locations.PURIFICATION_LOCATION_TO_DEX]
+        self.assertEqual(75, len(purify))
+        for location in purify:
+            self.assertNotEqual(LocationProgressType.EXCLUDED, location.progress_type, location.name)
 
     def test_the_dragonites_catch_is_excluded(self) -> None:
         from .. import species

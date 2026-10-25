@@ -84,3 +84,20 @@ def sources_by_location(world: Any) -> "dict[str, str]":
         if name in created and texts:
             out[name] = "; ".join(texts)
     return out
+
+
+def purification_sources_by_location(world: Any) -> "dict[str, str]":
+    """"Purify - {species}" -> its Shadow sources, only for purification locations this seed actually created."""
+    from .locations import purification_location_name
+
+    created = {location.name for location in world.multiworld.get_locations(world.player)}
+    out: "dict[str, str]" = {}
+    for dex, texts in sources_by_dex(world).items():
+        shadows = [text for text in texts if text.startswith("Shadow: ")]
+        try:
+            name = purification_location_name(dex)
+        except KeyError:
+            continue
+        if name in created and shadows:
+            out[name] = "; ".join(shadows)
+    return out

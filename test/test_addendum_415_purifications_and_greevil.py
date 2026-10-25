@@ -19,8 +19,9 @@ CLIENT = (Path(__file__).resolve().parent.parent / "Client.py").read_text(encodi
 
 
 def _purifies(test) -> "list[int]":
-    return sorted(L.PURIFICATION_LOCATION_TO_COUNT[l.name] for l in test.multiworld.get_locations(test.player)
-                  if l.name in L.PURIFICATION_LOCATION_TO_COUNT)
+    """RETARGETED (per-species purifications): the dex numbers of this seed's `Purify - X` checks."""
+    return sorted(L.PURIFICATION_LOCATION_TO_DEX[l.name] for l in test.multiworld.get_locations(test.player)
+                  if l.name in L.PURIFICATION_LOCATION_TO_DEX)
 
 
 class TestTheTable(unittest.TestCase):
@@ -28,13 +29,19 @@ class TestTheTable(unittest.TestCase):
         self.assertEqual(83 + O.ShadowPokemonExpansion.range_end, L.PURIFICATION_LOCATION_COUNT)
         self.assertEqual(127, L.PURIFICATION_LOCATION_COUNT)
         self.assertEqual(O.PurificationProgressionCap.range_end, L.PURIFICATION_LOCATION_COUNT)
-        for n in range(1, 128):
-            self.assertIn(L.purification_location_name(n), L.LOCATION_TABLE)
+        # RETARGETED (per-species purifications): one name per species, since any species can be a Shadow.
+        for dex in range(1, 387):
+            self.assertIn(L.purification_location_name(dex), L.LOCATION_TABLE)
 
     def test_the_old_32_kept_their_ids_and_the_new_ones_are_frozen(self) -> None:
-        self.assertEqual(635, L._FROZEN_LOCATION_OFFSETS["Purify 32 Shadow Pokemon"])
-        self.assertEqual(1692, L.LOCATION_TABLE["Purify 33 Shadow Pokemon"].id_offset)
-        self.assertEqual(1786, L.LOCATION_TABLE["Purify 127 Shadow Pokemon"].id_offset)
+        # RETARGETED (per-species purifications): the ladder's ids (604-635, 1692-1786) are retired, never reused;
+        # the per-species names are frozen from 1900 in National Dex order.
+        self.assertNotIn("Purify 32 Shadow Pokemon", L.LOCATION_TABLE)
+        used = {data.id_offset for data in L.LOCATION_TABLE.values()}
+        self.assertFalse(used & (set(range(604, 636)) | set(range(1692, 1787))))
+        self.assertEqual(1900, L.LOCATION_TABLE["Purify - Bulbasaur"].id_offset)
+        self.assertEqual(1900 + 215, L.LOCATION_TABLE["Purify - Teddiursa"].id_offset)
+        self.assertEqual(2285, L.LOCATION_TABLE["Purify - Deoxys"].id_offset)
 
     def test_the_client_agrees(self) -> None:
         self.assertEqual(L.PURIFICATION_LOCATION_COUNT, rc.PURIFICATION_LOCATION_COUNT)
@@ -49,8 +56,10 @@ class TestVanilla(PokemonXDTestBase):
     options = {"shadow_pokemon_expansion": 0}
 
     def test_eighty_three(self) -> None:
-        # RETARGETED BY ADDENDUM 479: 75 -- Greevil's seven and Miror B.'s post-game Dragonite have no rungs.
-        self.assertEqual(list(range(1, 76)), _purifies(self))
+        # RETARGETED BY ADDENDUM 479: 75 -- Greevil's seven and Miror B.'s post-game Dragonite have no checks.
+        # RETARGETED (per-species purifications): one per species, and Shadow species are one-to-one.
+        self.assertEqual(75, len(_purifies(self)))
+        self.assertEqual(sorted(self.multiworld.worlds[self.player]._purifiable_shadow_dex), _purifies(self))
 
 
 class TestFullExpansion(PokemonXDTestBase):
@@ -59,7 +68,7 @@ class TestFullExpansion(PokemonXDTestBase):
     def test_one_per_shadow_the_seed_really_holds(self) -> None:
         world = self.multiworld.worlds[self.player]
         self.assertGreater(world._purification_location_count, 83)
-        self.assertEqual(list(range(1, world._purification_location_count + 1)), _purifies(self))
+        self.assertEqual(world._purification_location_count, len(_purifies(self)))
 
     def test_every_one_is_reachable_with_everything(self) -> None:
         state = CollectionState(self.multiworld)
@@ -67,13 +76,17 @@ class TestFullExpansion(PokemonXDTestBase):
             if item.player == self.player:
                 state.collect(item, prevent_sweep=True)
         state.sweep_for_advancements()
-        for n in _purifies(self):
-            self.assertTrue(self.multiworld.get_location(L.purification_location_name(n), self.player)
-                            .can_reach(state), n)
+        for dex in _purifies(self):
+            self.assertTrue(self.multiworld.get_location(L.purification_location_name(dex), self.player)
+                            .can_reach(state), dex)
 
     def test_past_the_vanilla_83_needs_every_shadow_region(self) -> None:
-        location = self.multiworld.get_location(L.purification_location_name(84), self.player)
-        self.assertFalse(location.can_reach(CollectionState(self.multiworld)))
+        # RETARGETED (per-species purifications): no purification is open with nothing in hand -- each needs the
+        # Purify Chamber, behind the Machine Part.
+        empty = CollectionState(self.multiworld)
+        for dex in _purifies(self):
+            self.assertFalse(self.multiworld.get_location(L.purification_location_name(dex), self.player)
+                             .can_reach(empty), dex)
 
 
 class TestTheToggleOff(PokemonXDTestBase):
@@ -85,7 +98,7 @@ class TestTheToggleOff(PokemonXDTestBase):
 
 class TestTheClientHonoursTheToggle(unittest.TestCase):
     def test_it_sends_nothing_with_the_toggle_off(self) -> None:
-        self.assertIn("if newly_crossed and ctx.purification_checks:", CLIENT)
+        self.assertIn("if not ctx.purification_checks or not ctx.purified_shadow_ids:", CLIENT)
         self.assertIn('slot_data.get("purification_checks", True)', CLIENT)
 
 

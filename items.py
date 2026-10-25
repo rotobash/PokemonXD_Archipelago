@@ -20,6 +20,7 @@ from enum import Enum
 from BaseClasses import Item, ItemClassification
 
 from . import travel_locations
+from .species import NATIONAL_DEX
 
 
 class PokemonXDItem(Item):
@@ -597,6 +598,25 @@ GETITEM_ONLY_ITEMS = _bundle_table(
 #: The names no pool pass may ever draw. Consulted by the asserts below and by create_items' own guard.
 GETITEM_ONLY_ITEM_NAMES: "frozenset[str]" = frozenset(GETITEM_ONLY_ITEMS)
 
+# Purification Unlocks. One per species, because a name is part of the datapackage and a Shadow's species
+# changes per seed: a seed creates only the unlocks for the species its Shadows really are, and the client writes
+# every Shadow id of that species into the AP patch's `give.purified` list -- with `AP_ENABLE_PURIFYCHECKS` set,
+# the patch refuses to purify any Shadow not on it. The table's `filler` is a placeholder no pool pass reads: these
+# are in none of the source dicts, and each seed decides each one's classification (`World.create_item`).
+PURIFICATION_UNLOCK_PREFIX = "Purification Unlock - "
+
+
+def purification_unlock_item_name(dex: int) -> str:
+    return f"{PURIFICATION_UNLOCK_PREFIX}{NATIONAL_DEX[dex]}"
+
+
+PURIFICATION_UNLOCK_NAME_TO_DEX: "dict[str, int]" = {
+    purification_unlock_item_name(dex): dex for dex in sorted(NATIONAL_DEX)
+}
+PURIFICATION_UNLOCK_ITEMS = _table(
+    [(name, F, None, False) for name in PURIFICATION_UNLOCK_NAME_TO_DEX], 0,   # offsets frozen below
+)
+
 KEY_ITEMS_ALL: dict[str, ItemData] = {**KEY_ITEMS, **MASTER_BALL_ITEM, **TRAVEL_UNLOCK_ITEMS}
 USEFUL_ITEMS: dict[str, ItemData] = {
     **VITAMIN_ITEMS, **RARE_CANDY_PP_UP_ITEMS, **HELD_ITEMS, **HM_ITEMS,
@@ -617,6 +637,7 @@ ITEM_TABLE: dict[str, ItemData] = {
     **COMBINED_KEY_ITEMS,   # ADDENDUM 179
     **SCOOTER_ITEMS,        # ADDENDUM 273
     **GETITEM_ONLY_ITEMS,   # ADDENDUM 302 -- requestable, never placed
+    **PURIFICATION_UNLOCK_ITEMS,
 }
 
 # STABLE ID FREEZE (ADDENDUM 26). Every id_offset above was, until this addendum, purely a function of LIST
@@ -901,6 +922,10 @@ _FROZEN_ITEM_OFFSETS: dict[str, int] = {
     # Retired by ADDENDUM 177's merge, reserved so nothing can inherit them: 242 (Cave Poke Spot), 245 (Oasis
     # Poke Spot), 248 (Rockground Poke Spot). Their entries stay above, inert.
 }
+# Purification Unlocks, frozen to 262 + (dex - 1) = 262..647 -- a literal base, in National Dex order.
+for _name, _dex in PURIFICATION_UNLOCK_NAME_TO_DEX.items():
+    _FROZEN_ITEM_OFFSETS[_name] = 262 + (_dex - 1)
+del _name, _dex
 
 
 def _freeze_offsets(table: "dict[str, ItemData]", frozen: dict[str, int]) -> "dict[str, ItemData]":
@@ -944,6 +969,7 @@ ITEM_NAME_GROUPS: dict[str, set[str]] = {
     "Travel Unlocks": set(TRAVEL_UNLOCK_ITEMS.keys()),
     "Robo Kyogre Parts": set(MACGUFFIN_ITEMS.keys()),
     "Scooter": set(SCOOTER_ITEMS.keys()),
+    "Purification Unlocks": set(PURIFICATION_UNLOCK_ITEMS.keys()),
     # ADDENDUM 443: "!hint ID Card" (or "!hint Data ROM") hints the combined item.
     **{part: {COMBINED_KEY_ITEM_NAME} for part in COMBINED_KEY_ITEM_PARTS},
 }

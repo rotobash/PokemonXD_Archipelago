@@ -180,10 +180,13 @@ class TestNoChecksForThem(_PostGoal):
     options = {"shadow_pokemon_expansion": 0, "randomize_shadow_species": True}
 
     def test_no_purify_rung_past_the_pre_goal_shadows(self) -> None:
+        # RETARGETED (per-species purifications): no `Purify - X` for a species only the post-goal Shadows carry.
+        world = self.multiworld.worlds[self.player]
         names = self._names()
-        self.assertIn(locations.purification_location_name(75), names)
-        self.assertNotIn(locations.purification_location_name(76), names)
-        self.assertEqual(75, self.multiworld.worlds[self.player]._purification_location_count)
+        self.assertEqual(75, sum(1 for name in names if name in locations.PURIFICATION_LOCATION_TO_DEX))
+        self.assertEqual(75, world._purification_location_count)
+        for dex in world._post_goal_only_dex:
+            self.assertNotIn(locations.purification_location_name(dex), names, dex)
 
     def test_no_catch_for_a_species_only_they_carry(self) -> None:
         world = self.multiworld.worlds[self.player]

@@ -2,9 +2,9 @@
 Access rules for individual locations. Region-level gating lives in regions.py's entrance rules; a location
 gets a rule here only when its parent region's reachability is not the whole requirement.
 
-The cumulative "Defeat N Trainers" and "Purify N Shadow Pokemon" checks are TALLIES (ADDENDUM 432): threshold N
-is in logic once at least N trainers / Shadows can really be reached in this state, each counted behind its own
-fight's region, extra regions and items. They used to be ladders -- N gated on the one region holding the Nth
+The cumulative "Defeat N Trainers" checks are TALLIES (ADDENDUM 432): threshold N is in logic once at least N
+trainers can really be reached in this state, each counted behind its own fight's region, extra regions and
+items. Purifications are per species ("Purify - X"), each behind the fights that carry that species' Shadows. They used to be ladders -- N gated on the one region holding the Nth
 entry of a story-order list -- which Location Shuffle made unsound. No sphere number is hardcoded anywhere.
 
 THE ONE RULE EVERYTHING HERE OBEYS (ADDENDUM 168): an access rule may only name an item that actually ENTERS
@@ -386,27 +386,10 @@ def _requirement_is_in_the_pool(world, item_name: str) -> bool:
 # honest, and these categories hung straight off Menu -- AP believed "Purify 32 Shadow Pokemon" was reachable
 # on turn one. Rules first; the options (ADDENDUM 449: Shadow Catch Progression and the purification cap) then open categories.
 
-# Purification weights, a census: `data/shadow_pokemon_list.json` names the trainer holding each of the 83
-# vanilla shadows and the trainer census says where that trainer is. 83 shadows, 32 thresholds -- threshold N
-# is gated on the region where the Nth shadow becomes obtainable, so the weights are the region counts of the
-# first 32 in graph order and sum to exactly 32 by construction. Deliberately static when
-# `shadow_pokemon_expansion` adds more: the expansion hangs new shadows on existing trainers and so can only
-# make a threshold reachable EARLIER, and over-strict logic merely delays a sphere.
-def _purification_weights_from_census() -> "dict[str, int]":
-    from .game_data import shadow_regions
-
-    # ADDENDUM 415: the vanilla ladder only -- 83 thresholds, one per vanilla Shadow. The expansion's thresholds
-    # (84..127) are gated per seed in `_set_remaining_sphere_rules`, on where that seed's Shadows really are.
-    return shadow_regions.purification_weights(locations.VANILLA_SHADOW_COUNT)
-
-
-_PURIFICATION_WEIGHT_BY_REGION: dict[str, int] = _purification_weights_from_census()
-
 # The same census as _TRAINER_WEIGHT_BY_REGION, under its own name because `_set_sphere_rules` still selects
 # between them on ExcludeMtBattleTrainers.
 _UNIQUE_TRAINER_WEIGHT_BY_REGION: dict[str, int] = _trainer_weights_from_census()
 
-assert sum(_PURIFICATION_WEIGHT_BY_REGION.values()) == locations.VANILLA_SHADOW_COUNT
 assert sum(_UNIQUE_TRAINER_WEIGHT_BY_REGION.values()) == locations.TRAINER_DEFEAT_COUNT_LOCATION_COUNT
 
 # _SHOP_OCCURRENCE_REGIONS is retired (ADDENDUM 176): shop locations are named after shops and filed in their
@@ -419,113 +402,74 @@ assert sum(_UNIQUE_TRAINER_WEIGHT_BY_REGION.values()) == locations.TRAINER_DEFEA
 # Machine Part still gates Agate Village (`regions.REGION_EDGES`), and so the Purify Chamber and everything past it.
 
 
-def _purification_weights_for(world) -> "dict[str, int]":
-    """This world's vanilla ladder. ADDENDUM 423/424: Nightmare Citadark moves Citadark's Shadows (all but Lugia)
-    onto hosts elsewhere, so its ladder is the census minus them; their thresholds follow it, gated like the
-    expansion's on every region holding a Shadow."""
-    removed = frozenset(getattr(world, "_nightmare_removed_dex", None) or ())
-    if not removed:
-        return _PURIFICATION_WEIGHT_BY_REGION
-    from .game_data import shadow_regions
-
-    # ADDENDUM 479: the world's own count already leaves out the post-goal Shadows; so does its ladder.
-    return shadow_regions.purification_weights(_vanilla_shadow_count_for(world), removed, include_post_goal=False)
+PurificationWays = "tuple[tuple[tuple[str, ...], tuple[str, ...]], ...]"
 
 
-def _vanilla_shadow_count_for(world) -> int:
-    return int(getattr(world, "_vanilla_shadow_count", None) or locations.VANILLA_SHADOW_COUNT)
-
-
-def _purification_tail_regions(world) -> "tuple[str, ...]":
-    """Every region that holds a Shadow in this seed: the vanilla census's, plus each expansion host's own region.
-    Hosts with no region cannot occur -- `shadow_expansion_excluded_trainer_indices` fences region-less rows."""
-    from .game_data import trainer_placements
-
-    regions = set(_purification_weights_for(world))
-    # ADDENDUM 424: Nightmare Citadark's relocated Shadows sit on hosts the same way.
-    for plan in list(getattr(world, "_shadow_expansion_plans", None) or ()) + list(
-            getattr(world, "_nightmare_relocations", None) or ()):
-        placement = trainer_placements.PLACEMENTS.get(int(plan["trainer_index"]))
-        if placement is not None and placement.region:
-            regions.add(placement.region)
-    return tuple(sorted(regions))
-
-
-def _purification_shadow_groups(world) -> "list[tuple[tuple[tuple[tuple[str, ...], tuple[str, ...]], ...], int]]":
-    """ADDENDUM 432: every Shadow this seed really holds, as `[(ways to snag it, how many Shadows share exactly
-    those ways), ...]`. A way is `(regions to reach, items to hold)`; any one way will do.
+def purification_gates_by_species(world) -> "dict[int, PurificationWays]":
+    """dex -> every way to snag a Shadow of that species before the goal, each `(regions to reach, items to hold)`;
+    any one will do. ADDENDUM 432's per-Shadow gates, keyed by species now that each purification is its own check:
 
     - a vanilla Shadow still at its own trainers: one way per row carrying it (`shadow_regions.gates_for_ddpk`)
     - a Shadow moved by Nightmare Citadark / Remove Citadark or Greevil Shadows: its new host's row
     - a Shadow the expansion added: its host's row
 
-    Grouped so a rule walks ~40 distinct gates rather than 127 Shadows."""
+    A species with no way here (only post-goal Shadows, or no honest gate) gets no purification check. Read in
+    generate_early, off the per-seed caches it has just built -- the shadow pool is shuffled in place."""
     from . import items
-    from .game_data import load_json_data_file, shadow_regions
+    from .game_data import shadow_regions
+    from .game_data.shadow_regions import POST_GOAL_EVENT_ITEM
 
-    def compile_gate(gate) -> "tuple[tuple[str, ...], tuple[str, ...]]":
+    ways: "dict[int, set]" = {}
+
+    def record(dex: int, gate) -> None:
+        if gate is None or POST_GOAL_EVENT_ITEM in gate.required_items:
+            return   # ADDENDUM 479: no purification check for a Shadow only purifiable after the goal
         regions_needed = tuple(dict.fromkeys([gate.region, *gate.required_regions]))
         names = [items.requirement_to_pool_item(name) for name in gate.required_items]
         names = tuple(name for name in dict.fromkeys(names) if _requirement_is_in_the_pool(world, name))
-        return regions_needed, names
+        ways.setdefault(int(dex), set()).add((regions_needed, names))
 
-    shadows: "list[tuple[tuple[tuple[str, ...], tuple[str, ...]], ...]]" = []
-    removed = frozenset(getattr(world, "_nightmare_removed_dpkm", None) or ())
-    for entry in load_json_data_file("deckdata_dark_pokemon.json") or []:
-        if int(entry["dpkm_index"]) in removed:
-            continue
-        if shadow_regions.is_post_goal_ddpk(int(entry["ddpk_index"])):
-            continue   # ADDENDUM 479: no Purify rung for a Shadow only purifiable after the goal
-        gates = shadow_regions.gates_for_ddpk(int(entry["ddpk_index"]))
-        if gates:
-            shadows.append(tuple(sorted({compile_gate(g) for g in gates})))
-    hosted = [int(plan["trainer_index"]) for plan in getattr(world, "_nightmare_relocations", None) or ()
-              for _shadow in plan["shadows"]]
-    hosted += [int(plan["trainer_index"]) for plan in getattr(world, "_shadow_expansion_plans", None) or ()
-               for _mon in plan["new_pokemon"]]
-    for index in hosted:
-        gate = shadow_regions.gate_for_trainer_index(index)
-        if gate is not None:
-            shadows.append((compile_gate(gate),))
-    counts: "dict[tuple, int]" = {}
-    for ways in shadows:
-        counts[ways] = counts.get(ways, 0) + 1
-    return sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+    for dex, ddpks in (getattr(world, "_shadow_catch_ddpks", None) or {}).items():
+        for ddpk in ddpks:
+            if shadow_regions.is_post_goal_ddpk(int(ddpk)):
+                continue
+            for gate in shadow_regions.gates_for_ddpk(int(ddpk)):
+                record(dex, gate)
+    for dex, hosts in (getattr(world, "_shadow_catch_expansion_hosts", None) or {}).items():
+        for index in hosts:
+            record(dex, shadow_regions.gate_for_trainer_index(int(index)))
+    return {dex: tuple(sorted(found)) for dex, found in ways.items()}
 
 
-def _set_remaining_sphere_rules(world) -> None:
-    """The purification checks. ADDENDUM 432: `Purify N` is in logic when Agate Village (the Purify Chamber) is
-    reachable and AT LEAST N of this seed's Shadows can be snagged with what is held --
-    counted Shadow by Shadow from the fights that really carry them.
+def purification_way_is_open(state, player: int, ways: "PurificationWays") -> bool:
+    return any(all(state.can_reach(name, player=player) for name in regions_needed)
+               and all(state.has(name, player) for name in items_needed)
+               for regions_needed, items_needed in ways)
 
-    It used to be a ladder: threshold N gated on the ONE region where the Nth Shadow of a fixed story-order list
-    sat. That is only honest when the regions open in story order. With Location Shuffle they do not -- reaching
-    Phenac said nothing about the Pyrite and Poke Spot Shadows below it on the list -- and the list itself filed
-    every multi-appearance trainer's Shadows at their FIRST appearance. If Agate, Gateon and the lab hold only 13
-    Shadows, every purification past 13 has to be gated behind other areas, or the seed can softlock."""
-    from BaseClasses import LocationProgressType
 
-    from .game_data.shadow_regions import POST_GOAL_EVENT_ITEM
+def _set_purification_rules(world) -> None:
+    """"Purify - X": the Purify Chamber (Agate Village) reachable, one of X's Shadows snaggable, and -- with
+    Purification Unlocks on and X's unlock progression -- that unlock held. A useful unlock is left out of the rule
+    because logic cannot count it; its check is filler-only (`World._choose_purification_progression`), so nothing
+    anyone needs waits on it."""
+    from . import items
 
-    groups = _purification_shadow_groups(world)
     player = world.player
     floor = shadow_regions_floor()
-    # ADDENDUM 473: how many Shadows can be had BEFORE the goal. A threshold past that needs a post-goal Shadow
-    # (Miror B.'s Dragonite), so it is filler-only; its rule still lets it count once the goal is reached.
-    before_goal = sum(many for ways, many in groups
-                      if any(POST_GOAL_EVENT_ITEM not in items_needed for _regions, items_needed in ways))
-    for count in range(1, locations.PURIFICATION_LOCATION_COUNT + 1):
+    unlocks = set(getattr(world, "_purification_unlock_progression_dex", None) or ())
+    for dex, ways in (getattr(world, "_purification_gates", None) or {}).items():
         try:
-            location = world.multiworld.get_location(locations.purification_location_name(count), player)
+            location = world.multiworld.get_location(locations.purification_location_name(dex), player)
         except KeyError:
             continue
-        if count > before_goal:
-            location.progress_type = LocationProgressType.EXCLUDED
+        unlock = items.purification_unlock_item_name(dex) if dex in unlocks else None
 
-        def rule(state, need=count, groups=tuple(groups)):
+        def rule(state, ways=ways, unlock=unlock):
             if not state.can_reach(floor, player=player):   # ADDENDUM 483: no Snag Machine item to hold
                 return False
-            return _count_reachable(state, player, groups, need)
+            if unlock is not None and not state.has(unlock, player):
+                return False
+            return purification_way_is_open(state, player, ways)
 
         set_rule(location, rule)
 
@@ -655,7 +599,7 @@ def _set_trainer_census_rules(world) -> None:
                     return False
             return True
 
-        # add_rule, not set_rule: `_set_remaining_sphere_rules` may already have attached something, and a
+        # add_rule, not set_rule: `_set_purification_rules` may already have attached something, and a
         # gate must narrow what is there rather than replace it.
         add_rule(location, rule)
 
@@ -782,7 +726,7 @@ def set_all_rules(world) -> None:
     _set_sphere_rules(world)
     _set_chest_rules(world)
     _set_trainer_census_rules(world)
-    _set_remaining_sphere_rules(world)
+    _set_purification_rules(world)
     _set_catch_rules(world)
     _set_shop_tier_rules(world)
     _set_repeatable_trainer_rules(world)

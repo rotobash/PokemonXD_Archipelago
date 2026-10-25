@@ -182,10 +182,15 @@ class TestThePurificationGateIsActuallyWired(unittest.TestCase):
     argument is always False is a comment."""
 
     def test_the_client_feeds_it_a_real_battle_signal(self) -> None:
+        """RETARGETED (per-species purifications): the client no longer watches the party recap records, so there is
+        no battle to wait out -- the AP patch logs each purification by Shadow id as it happens, and the save's
+        Shadow status table covers everything before this boot."""
         import pathlib
         source = (pathlib.Path(__file__).resolve().parent.parent / "Client.py").read_text(encoding="utf-8")
-        self.assertIn("in_battle = ram_client.read_battle_ui_flag() == 1", source)
-        self.assertIn("ctx.block_base, ram_client.PARTY_BASE, in_battle=in_battle", source)
+        body = source.split("async def check_purifications", 1)[1].split("\ndef ", 1)[0]
+        self.assertIn("ctx.ap_patch_block.purified", body)
+        self.assertIn("ram_client.read_shadow_monitor(ctx.block_base)", body)
+        self.assertNotIn("purification_tracker", source)
 
     def test_the_three_diagnostic_counters_are_printed(self) -> None:
         """ADDENDUM 236b caught the write-up claiming these were printed when they were not. Each one is a

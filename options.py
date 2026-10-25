@@ -72,8 +72,8 @@ class TrainerDefeatMode(Choice):
 
 class PurificationChecks(DefaultOnToggle):
     """
-    Make purifications checks: "Purify 1 Shadow Pokemon" up to one per Shadow Pokemon in your seed
-    (83, plus however many 'Shadow Pokemon Expansion' adds).
+    Make purifications checks: one "Purify - {species}" check per Shadow Pokemon in your seed
+    (83, plus however many 'Shadow Pokemon Expansion' adds), named after the species it really is this seed.
 
     Off: no purification checks at all, and the cap below does nothing.
     """
@@ -83,8 +83,9 @@ class PurificationChecks(DefaultOnToggle):
 
 class PurificationProgressionCap(Range):
     """
-    How many of the "Purify N Shadow Pokemon" checks are allowed to hold a progression or useful item.
-    Only meaningful with "Purification Checks" on.
+    How many of the "Purify - {species}" checks are allowed to hold a progression or useful item. Which Shadows
+    those are is picked per seed; the rest hold filler only. Only meaningful with "Purification Checks" on.
+    With "Purification Unlocks" on, these are also the Shadows whose unlocks are progression.
 
     IF YOU DO NOT PLAN TO CATCH EVERY SHADOW POKEMON, KEEP THIS RELATIVELY LOW OR YOU WILL LOCK YOURSELF.
     You can use /mirorforce {pyrite, realgam, oasis, rock, cave} to spawn Miror B in these locations, once you have the radar and one of the locations.
@@ -97,6 +98,20 @@ class PurificationProgressionCap(Range):
     range_start = 0
     range_end = 127
     default = 30
+
+
+class PurificationUnlocks(Toggle):
+    """
+    Adds a "Purification Unlock - {species}" item for every Shadow Pokemon in your seed. A Shadow Pokemon cannot
+    be purified until its unlock has been received, however low its heart gauge goes.
+
+    One unlock, for a Shadow you can snag right from the start, is progression and placed early in your own
+    world. The unlocks for the Shadows picked by "Purification Checks That Can Hold Progression" are progression
+    too; the rest are useful, and those for Shadows only met after the goal are filler. They take the place of
+    filler and useful items in the pool.
+    """
+
+    display_name = "Purification Unlocks"
 
 
 class TrainerDefeatCheckCount(Range):
@@ -915,6 +930,7 @@ class PokemonXDOptions(PerGameCommonOptions):
     # -- Shadow Pokemon --
     purification_checks: PurificationChecks
     purification_progression_cap: PurificationProgressionCap
+    purification_unlocks: PurificationUnlocks
     shadow_pokemon_expansion: ShadowPokemonExpansion
     missable_trainer_shadows: MissableTrainerShadows
     randomize_shadow_species: RandomizeShadowSpecies
@@ -1001,6 +1017,7 @@ OPTION_GROUPS: "list[OptionGroup]" = [
     OptionGroup("Shadow Pokemon", [
         PurificationChecks,
         PurificationProgressionCap,
+        PurificationUnlocks,
         ShadowPokemonExpansion,
         MissableTrainerShadows,
         RandomizeShadowSpecies,
