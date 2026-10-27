@@ -597,6 +597,22 @@ GETITEM_ONLY_ITEMS = _bundle_table(
 #: The names no pool pass may ever draw. Consulted by the asserts below and by create_items' own guard.
 GETITEM_ONLY_ITEM_NAMES: "frozenset[str]" = frozenset(GETITEM_ONLY_ITEMS)
 
+# Purification Unlocks: one per Shadow slot (DDPK index 1-127), see game_data/purify_unlocks.py. No `game_item_id` --
+# the client writes the slot into the AP patch's RAM block instead of the Bag. Progression in the table; create_item
+# demotes them to useful in a seed whose `Purify N` checks are off, where nothing in logic needs them. Only the slots
+# a seed really holds are created, and create_items adds them itself rather than through the progression pass.
+from .game_data import purify_unlocks as _purify_unlocks  # noqa: E402
+
+_PURIFY_UNLOCK_SPECS: list[tuple[str, ItemClassification, int | None, bool]] = [
+    (_purify_unlocks.unlock_item_name(ddpk), P, None, False) for ddpk in _purify_unlocks.ALL_DDPK_INDICES
+]
+PURIFY_UNLOCK_ITEMS = _table(
+    _PURIFY_UNLOCK_SPECS,
+    _prog_count + _useful_count + _filler_count + len(TRAP_ITEMS) + len(_MACGUFFIN_SPECS) + len(_SCOOTER_SPECS)
+    + len(_GETITEM_ONLY_SPECS),
+)
+PURIFY_UNLOCK_ITEM_NAMES: "frozenset[str]" = frozenset(PURIFY_UNLOCK_ITEMS)
+
 KEY_ITEMS_ALL: dict[str, ItemData] = {**KEY_ITEMS, **MASTER_BALL_ITEM, **TRAVEL_UNLOCK_ITEMS}
 USEFUL_ITEMS: dict[str, ItemData] = {
     **VITAMIN_ITEMS, **RARE_CANDY_PP_UP_ITEMS, **HELD_ITEMS, **HM_ITEMS,
@@ -617,6 +633,7 @@ ITEM_TABLE: dict[str, ItemData] = {
     **COMBINED_KEY_ITEMS,   # ADDENDUM 179
     **SCOOTER_ITEMS,        # ADDENDUM 273
     **GETITEM_ONLY_ITEMS,   # ADDENDUM 302 -- requestable, never placed
+    **PURIFY_UNLOCK_ITEMS,  # Purification Unlocks -- only the seed's own slots are created
 }
 
 # STABLE ID FREEZE (ADDENDUM 26). Every id_offset above was, until this addendum, purely a function of LIST
@@ -897,6 +914,8 @@ _FROZEN_ITEM_OFFSETS: dict[str, int] = {
     '99 Rare Candies': 259,       # frozen on the commit that added it
     '5000 Poke Coupons': 260,     # frozen on the commit that added it
     '99 Candy Boxes': 261,        # frozen on the commit that added it (ADDENDUM 428)
+    # Purification Unlocks, frozen on the commit that added them: Shadow slot N is 261 + N, so 262-388.
+    **{_purify_unlocks.unlock_item_name(ddpk): 261 + ddpk for ddpk in _purify_unlocks.ALL_DDPK_INDICES},
     #
     # Retired by ADDENDUM 177's merge, reserved so nothing can inherit them: 242 (Cave Poke Spot), 245 (Oasis
     # Poke Spot), 248 (Rockground Poke Spot). Their entries stay above, inert.
@@ -944,6 +963,7 @@ ITEM_NAME_GROUPS: dict[str, set[str]] = {
     "Travel Unlocks": set(TRAVEL_UNLOCK_ITEMS.keys()),
     "Robo Kyogre Parts": set(MACGUFFIN_ITEMS.keys()),
     "Scooter": set(SCOOTER_ITEMS.keys()),
+    "Purify Unlocks": set(PURIFY_UNLOCK_ITEMS.keys()),
     # ADDENDUM 443: "!hint ID Card" (or "!hint Data ROM") hints the combined item.
     **{part: {COMBINED_KEY_ITEM_NAME} for part in COMBINED_KEY_ITEM_PARTS},
 }
@@ -967,9 +987,20 @@ def get_item_name_to_id(base_id: int, include_retired: bool = False) -> dict[str
             if include_retired or name not in RETIRED_DATAPACKAGE_ITEMS}
 
 
+def purify_unlocks_gate_logic(world) -> bool:
+    """True when a received Purify Unlock is something logic waits on: the unlocks are on and so are the `Purify N`
+    checks that count purifications."""
+    options = getattr(world, "options", None)
+    return (bool(getattr(options, "purification_unlocks", 0))
+            and bool(getattr(options, "purification_checks", 1)))
+
+
 def create_item(world, name: str) -> "PokemonXDItem":
     data = ITEM_TABLE[name]
-    return PokemonXDItem(name, data.classification, world.item_name_to_id[name], world.player)
+    classification = data.classification
+    if name in PURIFY_UNLOCK_ITEM_NAMES and not purify_unlocks_gate_logic(world):
+        classification = U
+    return PokemonXDItem(name, classification, world.item_name_to_id[name], world.player)
 
 
 # Names eligible for random filler selection: true FILLER_ITEMS only. USEFUL_ITEMS are deliberately NOT in

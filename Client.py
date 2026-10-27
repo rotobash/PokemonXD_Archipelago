@@ -550,6 +550,8 @@ class PokemonXDCommandProcessor(ClientCommandProcessor):
         logger.info(self.ctx.death_link_bridge.describe())
         logger.info(self.ctx.whiteout_latch.describe())   # ADDENDUM 400
         logger.info(self.ctx.whiteout_counter.describe())  # ADDENDUM 475
+        if self.ctx.purification_unlocks:
+            logger.info(self.ctx.purify_unlock_sync.describe())
         watch = self.ctx.battle_party_watch                # ADDENDUM 472
         logger.info(f"Battle watch: {watch.locates} locate(s), {watch.full_locates} full-memory locate(s), "
                     f"{watch.stale_resets} stale record set(s) dropped, "
@@ -1303,6 +1305,10 @@ class PokemonXDContext(CommonContext):
         self.death_link_bridge.whiteout_latch = self.whiteout_latch
         self.battle_party_watch = ram_client.BattlePartyWatch()   # ADDENDUM 417
         self.whiteout_counter = ram_client.WhiteoutCounterWatch()   # ADDENDUM 475
+        # Purification Unlocks: off until slot data says so, and {DDPK slot: species} for the receive message.
+        self.purification_unlocks: bool = False
+        self.purify_unlock_species: "dict[int, str]" = {}
+        self.purify_unlock_sync = ram_client.PurifyUnlockSync()
         self.area_story_memory.whiteout_latch = self.whiteout_latch
         # Key-item reconciliation owns the gating key items outright; give_items() does not write them. Needs
         # key_item_shuffle: with it off the player is supposed to hold whatever the story hands them.
@@ -1627,6 +1633,9 @@ class PokemonXDContext(CommonContext):
             self.map_level_text.levels = {str(k): int(v) for k, v in dict(slot_data.get("map_place_levels") or {}).items()}
             self.exclude_mt_battle_trainers = bool(slot_data.get("exclude_mt_battle_trainers", False))
             self.purification_checks = bool(slot_data.get("purification_checks", True))   # ADDENDUM 415
+            self.purification_unlocks = bool(slot_data.get("purification_unlocks", False))
+            self.purify_unlock_species = {int(k): str(v)
+                                          for k, v in dict(slot_data.get("purify_unlock_species") or {}).items()}
             self.robo_kyogre_parts_required = int(slot_data.get("robo_kyogre_parts_required", 0) or 0)
             self.robo_kyogre_parts_unlock_citadark = bool(
                 slot_data.get("robo_kyogre_parts_unlock_citadark", False)
@@ -2057,6 +2066,9 @@ TRAP_ITEM_NAMES = {"Itemfinder Malfunction Trap"}
 # Neither effect item is a Bag item; both are a currency write into the save block, four bytes apart.
 # Everything else in `ITEM_TABLE` routes to a pocket and confirms a quantity, and these cannot.
 EFFECT_ITEM_NAMES = TRAP_ITEM_NAMES | {items.POKECOUPON_ITEM_NAME}
+# Purification Unlocks are not delivered here at all -- `sync_purify_unlocks` keeps the AP patch's list in step with
+# `items_received` every poll. Dispatching them as effect items only marks them received and says which Shadow it is.
+EFFECT_ITEM_NAMES = EFFECT_ITEM_NAMES | items.PURIFY_UNLOCK_ITEM_NAMES
 
 
 def _apply_pokecoupon_item(ctx: PokemonXDContext, item_name: str) -> None:
@@ -2080,6 +2092,36 @@ def _apply_effect_item(ctx: PokemonXDContext, item_name: str) -> None:
         _apply_trap_effect(ctx, item_name)
     elif item_name == items.POKECOUPON_ITEM_NAME:
         _apply_pokecoupon_item(ctx, item_name)
+    elif item_name in items.PURIFY_UNLOCK_ITEM_NAMES:
+        _announce_purify_unlock(ctx, item_name)
+
+
+def _received_purify_unlock_ddpks(ctx: PokemonXDContext) -> "set[int]":
+    from .game_data.purify_unlocks import ddpk_for_unlock_item
+
+    found = (ddpk_for_unlock_item(ITEM_ID_TO_NAME.get(network_item.item, "")) for network_item in ctx.items_received)
+    return {ddpk for ddpk in found if ddpk is not None}
+
+
+def _announce_purify_unlock(ctx: PokemonXDContext, item_name: str) -> None:
+    from .game_data.purify_unlocks import ddpk_for_unlock_item
+
+    ddpk = ddpk_for_unlock_item(item_name)
+    species_name = ctx.purify_unlock_species.get(ddpk) if ddpk is not None else None
+    logger.info(f"Received {item_name}" + (f" -- your Shadow {species_name} can now be purified." if species_name
+                                           else " -- that Shadow can now be purified."))
+
+
+def sync_purify_unlocks(ctx: PokemonXDContext) -> None:
+    """Purification Unlocks: the AP patch's flag bit and `give.purified[]`, reconciled against everything received.
+    Runs as soon as Dolphin is hooked, before the save block resolves -- the block is at a fixed address and the
+    game reads it from the title screen on. Waits for the server's full item list, so the empty list a (re)connect
+    starts with never takes unlocks away."""
+    if not ctx.purification_unlocks or not _lab_hold_inputs_ready(ctx):
+        return
+    note = ctx.purify_unlock_sync.poll(True, _received_purify_unlock_ddpks(ctx))
+    if note:
+        _note(ctx, note)
 
 
 def _apply_trap_effect(ctx: PokemonXDContext, item_name: str) -> None:
@@ -4596,6 +4638,13 @@ async def dolphin_sync_task(ctx: PokemonXDContext) -> None:
                     ctx._fst_iso_hint_logged = True
                     logger.info("Tip: run `/fstiso <path to your patched .iso>` once so the client can repair "
                                 "'DVDOpen ... not found' freezes.")
+
+                # Purification Unlocks: ABOVE the block_base gate too. The AP patch's block is at a fixed address,
+                # not in the save, and a cold boot zeroes it -- so it is put back from the title screen on.
+                try:
+                    sync_purify_unlocks(ctx)
+                except Exception:
+                    pass  # never let the reconcile disturb the poll loop
 
                 # ADDENDUM 421: the game picks its save buffer's address at boot (OSGetTime-seeded), so a reset
                 # or a save state from another boot moves it while Dolphin stays hooked. Every read and write

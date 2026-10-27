@@ -10405,6 +10405,64 @@ class WhiteoutCounterWatch:
 
 
 @dataclass
+class PurifyUnlockSync:
+    """Purification Unlocks (`game_data/purify_unlocks.py`): keeps the AP patch's `give.purified[]` list and flag bit
+    2 matching what the multiworld has sent, every poll.
+
+    A reconciler, not a delivery: the block is RAM, so a cold boot, a reset or a save state from another session puts
+    something else there, and the next poll writes the whole list back. It compares before it writes, so a list
+    already in place costs one read. Only bit 2 of the flags word is touched; the rest belong to other features.
+    Nothing is read or written until the patch's hook is seen, because without the patch that address is the game's
+    own memory."""
+
+    installed: "bool | None" = None
+    writes: int = 0
+    unlocked: int = 0
+
+    def poll(self, enabled: bool, ddpk_indices) -> "str | None":
+        """Reconcile once. Returns a line worth logging when something was written, else None."""
+        from .game_data import purify_unlocks as _pu
+
+        try:
+            hook_word = struct.unpack(">I", read_bytes(_pu.AP_MAIN_HOOK_SITE, 4))[0]
+        except Exception:
+            return None
+        self.installed = _pu.ap_patch_installed(hook_word)
+        if not self.installed:
+            return None
+        base = _pu.AP_BLOCK_ADDRESS
+        flags_address = base + _pu.FLAGS_OFFSET
+        bit = 1 << _pu.PURIFY_UNLOCK_FLAG_BIT
+        try:
+            flags = struct.unpack(">H", read_bytes(flags_address, 2))[0]
+            wanted_flags = (flags | bit) if enabled else (flags & ~bit)
+            notes: "list[str]" = []
+            if wanted_flags != flags:
+                write_bytes(flags_address, struct.pack(">H", wanted_flags))
+                notes.append("purification lock " + ("on" if enabled else "off"))
+            if enabled:
+                wanted = _pu.encode_give_purified(ddpk_indices)
+                address = base + _pu.GIVE_PURIFY_COUNTER_OFFSET
+                if read_bytes(address, len(wanted)) != wanted:
+                    write_bytes(address, wanted)
+                    notes.append(f"{len(wanted) // 2 - 1} purification unlock(s) written")
+                self.unlocked = len(wanted) // 2 - 1
+        except Exception:
+            return None
+        if not notes:
+            return None
+        self.writes += 1
+        return "Purification Unlocks: " + "; ".join(notes) + "."
+
+    def describe(self) -> str:
+        if self.installed is None:
+            return "Purification Unlocks: not read yet."
+        if not self.installed:
+            return "Purification Unlocks: the AP patch is NOT in this ISO -- nothing is written."
+        return f"Purification Unlocks: {self.unlocked} Shadow(s) unlocked; block rewritten {self.writes} time(s)."
+
+
+@dataclass
 class DeathLinkBridge:
     """Sends a death when the player's party is wiped, and wipes the party when a death arrives.
 

@@ -99,6 +99,17 @@ class PurificationProgressionCap(Range):
     default = 30
 
 
+class PurificationUnlocks(Toggle):
+    """
+    Each Shadow Pokemon gets its own "Purify Unlock" item, and it cannot be purified until you have it.
+    Items are named by Shadow slot ("Purify Unlock - Shadow 001"); the client says which species each one is.
+    With "Purification Checks" on, the "Purify N" checks need that many unlocks for Shadows you can reach.
+    The unlocks take the place of filler items.
+    """
+
+    display_name = "Purification Unlocks"
+
+
 class TrainerDefeatCheckCount(Range):
     """
     Only meaningful when Shuffle Trainer Defeats is on with setting Cumulative. Defaults to 100.
@@ -923,6 +934,7 @@ class PokemonXDOptions(PerGameCommonOptions):
     # -- Shadow Pokemon --
     purification_checks: PurificationChecks
     purification_progression_cap: PurificationProgressionCap
+    purification_unlocks: PurificationUnlocks
     shadow_pokemon_expansion: ShadowPokemonExpansion
     missable_trainer_shadows: MissableTrainerShadows
     randomize_shadow_species: RandomizeShadowSpecies
@@ -1010,6 +1022,7 @@ OPTION_GROUPS: "list[OptionGroup]" = [
     OptionGroup("Shadow Pokemon", [
         PurificationChecks,
         PurificationProgressionCap,
+        PurificationUnlocks,
         ShadowPokemonExpansion,
         MissableTrainerShadows,
         RandomizeShadowSpecies,

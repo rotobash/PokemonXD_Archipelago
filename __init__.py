@@ -134,6 +134,8 @@ def _capacity_refusal(world, needed: int, capacity: int) -> str:
         )
     elif int(getattr(world.options, "purification_progression_cap", 0)) < 1:
         suggestions.append("raise 'Purification Checks That Can Hold Progression' above 0")
+    if bool(getattr(world.options, "purification_unlocks", 0)):
+        suggestions.append("turn off 'Purification Unlocks' (one item per Shadow Pokemon)")
 
     if not suggestions:
         # Nothing this guard knows how to widen is still closed. Say so rather than inventing advice.
@@ -635,6 +637,16 @@ class PokemonXDWorld(World):
                     ),
                     line_reserved_species=_line_reserved,   # ADDENDUM 486
                 )
+                # Purification Unlocks: each generated Shadow's DDPK slot, pinned here rather than left to the ISO
+                # patcher's free-slot draw, so its "Purify Unlock - Shadow N" names the Shadow the patcher writes.
+                # The same order that draw takes (plan order, from the first free slot), so the ISO is unchanged.
+                from .game_data.purify_unlocks import FIRST_EXPANSION_DDPK_INDEX
+
+                _next_ddpk = FIRST_EXPANSION_DDPK_INDEX
+                for plan in self._shadow_expansion_plans:
+                    for mon in plan["new_pokemon"]:
+                        mon["target_ddpk_index"] = _next_ddpk
+                        _next_ddpk += 1
                 for plan in self._shadow_expansion_plans:
                     for mon in plan["new_pokemon"]:
                         dex = national_dex_for(mon["species"])
@@ -706,6 +718,28 @@ class PokemonXDWorld(World):
         self._purification_location_count = _vanilla_shadow_count + sum(
             len(plan["new_pokemon"]) for plan in (self._shadow_expansion_plans or ())
         ) + sum(len(plan["shadows"]) for plan in self._nightmare_relocations)
+
+        # Purification Unlocks: {DDPK slot: this seed's species name} for every Shadow the seed really holds -- the
+        # vanilla slots still on a trainer, the relocated ones, and the expansion's pinned ones. create_items makes
+        # one unlock per key; slot data carries the names, which a datapackage item name cannot.
+        _species_by_dpkm: "dict[int, int]" = (
+            {mon.index: mon.species_id for trainer in shadow_pool.trainers for mon in trainer.team}
+            if shadow_pool is not None else {})
+        _relocated_ddpks = {int(shadow["ddpk_index"]) for plan in self._nightmare_relocations
+                            for shadow in plan["shadows"]}
+        _unlock_species: "dict[int, int]" = {}
+        for _row in load_json_data_file("deckdata_dark_pokemon.json") or []:
+            _ddpk, _dpkm = int(_row["ddpk_index"]), int(_row["dpkm_index"])
+            if _dpkm in self._nightmare_removed_dpkm and _ddpk not in _relocated_ddpks:
+                continue
+            _unlock_species[_ddpk] = _species_by_dpkm.get(_dpkm, int(_row["species"]))
+        for plan in (self._shadow_expansion_plans or ()):
+            for mon in plan["new_pokemon"]:
+                _unlock_species[int(mon["target_ddpk_index"])] = int(mon["species"])
+        self._purify_unlock_species: "dict[int, str]" = {
+            ddpk: str(INTERNAL_INDEX_TO_NATIONAL_DEX.get(internal, (None, None))[1] or f"#{internal}").title()
+            for ddpk, internal in sorted(_unlock_species.items())
+        }
 
         # Poke Spot reassignment (ADDENDUM 43): always on, no toggle. Prefers species the Shadow pool does not
         # already cover, and is cached for the same two readers.
@@ -1208,6 +1242,15 @@ class PokemonXDWorld(World):
         for _ in range(macguffin_count):
             item_pool.append(self.create_item(items.MACGUFFIN_ITEM_NAME))
 
+        # Purification Unlocks: one per Shadow slot this seed holds. Progression when the `Purify N` checks count on
+        # them (items.create_item demotes them otherwise), and created before the capacity check either way, since
+        # a useful item needs a DEFAULT location as much as a progression one does. They displace filler.
+        if bool(self.options.purification_unlocks):
+            from .game_data.purify_unlocks import unlock_item_name
+
+            for ddpk in getattr(self, "_purify_unlock_species", None) or {}:
+                item_pool.append(self.create_item(unlock_item_name(ddpk)))
+
         include_travel_unlocks = bool(self.options.randomize_travel_locations)
         # ADDENDUM 168: with the shuffle off the key items stay vanilla; the graph still gates on them.
         shuffle_key_items = bool(getattr(self.options, "key_item_shuffle", 1))
@@ -1216,6 +1259,8 @@ class PokemonXDWorld(World):
             if data.classification.name == "progression":
                 if name in items.TRAVEL_UNLOCK_ITEMS and not include_travel_unlocks:
                     continue
+                if name in items.PURIFY_UNLOCK_ITEM_NAMES:
+                    continue  # added above, one per Shadow slot this seed really holds
                 # Start With Miror Radar and Poke Spots: the Poke Spots' unlock is starting inventory, not a pool item.
                 if (include_travel_unlocks and bool(self.options.start_with_poke_spots)
                         and name == items.TRAVEL_UNLOCK_POKE_SPOTS_ITEM_NAME):
@@ -1518,6 +1563,7 @@ class PokemonXDWorld(World):
                 "agate_village_pit_stop",  # ADDENDUM 311 -- the client stops treating Agate's shop as a shop
                 "reduce_citadark_grind",  # ADDENDUM 427 -- the client describes the Candy Box at Gateon
                 "purification_checks",  # ADDENDUM 415 -- off: the client sends no `Purify N`
+                "purification_unlocks",  # the client sets the patch's flag bit and keeps give.purified[] in step
                 # ADDENDUM 196: both options are gone -- the area memory arms off randomize_travel_locations.
                 "key_item_shuffle",
                 "nightmare_citadark",  # ADDENDUM 423
@@ -1596,6 +1642,10 @@ class PokemonXDWorld(World):
         # For trackers: how many "Purify N" checks this seed has, and the Data Storage key the client keeps the
         # current room in ({team} and {slot} filled from the connection).
         slot_data["purification_location_count"] = int(getattr(self, "_purification_location_count", 0) or 0)
+        # Purification Unlocks: {"<DDPK slot>": species} -- what each "Purify Unlock - Shadow N" is this seed.
+        if bool(self.options.purification_unlocks):
+            slot_data["purify_unlock_species"] = {
+                str(ddpk): name for ddpk, name in (getattr(self, "_purify_unlock_species", None) or {}).items()}
         slot_data["room_id_key"] = ROOM_ID_KEY_TEMPLATE
         slot_data["room_area_key"] = ROOM_AREA_KEY_TEMPLATE
         # Missable Trainer Shadows: each missable host's label and the Shadows on it, for the client's hand-off to

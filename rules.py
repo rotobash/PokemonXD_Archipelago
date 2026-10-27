@@ -469,6 +469,18 @@ def _purification_shadow_groups(world) -> "list[tuple[tuple[tuple[tuple[str, ...
         names = tuple(name for name in dict.fromkeys(names) if _requirement_is_in_the_pool(world, name))
         return regions_needed, names
 
+    # Purification Unlocks: a Shadow counts only once its own unlock is held too, so every way to it needs that item.
+    # Each Shadow's ways become distinct, so the grouping below stops merging them -- ~127 groups rather than ~40.
+    from .game_data.purify_unlocks import unlock_item_name
+
+    needs_unlock = items.purify_unlocks_gate_logic(world)
+
+    def with_unlock(ways, ddpk: "int | None"):
+        if not needs_unlock or ddpk is None:
+            return ways
+        unlock = unlock_item_name(ddpk)
+        return tuple(sorted((regions_needed, names + (unlock,)) for regions_needed, names in ways))
+
     shadows: "list[tuple[tuple[tuple[str, ...], tuple[str, ...]], ...]]" = []
     removed = frozenset(getattr(world, "_nightmare_removed_dpkm", None) or ())
     for entry in load_json_data_file("deckdata_dark_pokemon.json") or []:
@@ -478,15 +490,15 @@ def _purification_shadow_groups(world) -> "list[tuple[tuple[tuple[tuple[str, ...
             continue   # ADDENDUM 479: no Purify rung for a Shadow only purifiable after the goal
         gates = shadow_regions.gates_for_ddpk(int(entry["ddpk_index"]))
         if gates:
-            shadows.append(tuple(sorted({compile_gate(g) for g in gates})))
-    hosted = [int(plan["trainer_index"]) for plan in getattr(world, "_nightmare_relocations", None) or ()
-              for _shadow in plan["shadows"]]
-    hosted += [int(plan["trainer_index"]) for plan in getattr(world, "_shadow_expansion_plans", None) or ()
-               for _mon in plan["new_pokemon"]]
-    for index in hosted:
+            shadows.append(with_unlock(tuple(sorted({compile_gate(g) for g in gates})), int(entry["ddpk_index"])))
+    hosted = [(int(plan["trainer_index"]), int(shadow["ddpk_index"]))
+              for plan in getattr(world, "_nightmare_relocations", None) or () for shadow in plan["shadows"]]
+    hosted += [(int(plan["trainer_index"]), mon.get("target_ddpk_index"))
+               for plan in getattr(world, "_shadow_expansion_plans", None) or () for mon in plan["new_pokemon"]]
+    for index, ddpk in hosted:
         gate = shadow_regions.gate_for_trainer_index(index)
         if gate is not None:
-            shadows.append((compile_gate(gate),))
+            shadows.append(with_unlock((compile_gate(gate),), ddpk))
     counts: "dict[tuple, int]" = {}
     for ways in shadows:
         counts[ways] = counts.get(ways, 0) + 1

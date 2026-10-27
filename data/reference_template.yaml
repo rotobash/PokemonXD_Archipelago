@@ -317,6 +317,14 @@ Pokemon XD Gale of Darkness:
     random-high: 0 # random value weighted towards higher values
     random-range-0-127: 0 # random value between 0 and 127
 
+  purification_unlocks:
+    # Each Shadow Pokemon gets its own "Purify Unlock" item, and it cannot be purified until you have it.
+    # Items are named by Shadow slot ("Purify Unlock - Shadow 001"); the client says which species each one is.
+    # With "Purification Checks" on, the "Purify N" checks need that many unlocks for Shadows you can reach.
+    # The unlocks take the place of filler items.
+    'false': 50
+    'true': 0
+
   shadow_pokemon_expansion:
     # Adds this many BRAND-NEW Shadow Pokemon to the game, on top of the 83 vanilla ones -- real trainers each
     # gain one or more extra team members that are Shadow Pokemon (Shadow-only moves included), the same
