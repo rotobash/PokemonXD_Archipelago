@@ -1944,7 +1944,7 @@ def dol_sections(reader, dol_offset: int) -> "list[tuple[int, int, int, int]]":
 START_DOL_PATCH_RESOURCE = ("assets", "patch.diff")
 #: SHA-1 of the whole main.dol, header through the furthest section end, before and after the patch.
 START_DOL_VANILLA_SHA1 = "ff9e752ead9914af0b363ae6c831a34ccce189d2"
-START_DOL_PATCHED_SHA1 = "a1eda395d779b0f07988d417100724f0c295ec93"
+START_DOL_PATCHED_SHA1 = "da39a3ee5e6b4b0d3255bfef95601890afd80709"
 
 
 def dol_length(reader, dol_offset: int) -> int:
