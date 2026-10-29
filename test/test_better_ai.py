@@ -3,7 +3,9 @@
 
 from __future__ import annotations
 
+import json
 import unittest
+from pathlib import Path
 
 from ..tools import iso_patcher
 from ..tools import xd_deck_format as deck_format
@@ -60,3 +62,11 @@ class TestTheEdit(unittest.TestCase):
         self.assertEqual(232, len(vanilla))
         self.assertEqual(AI, vanilla[AI])
         self.assertEqual(SHADOW_AI, vanilla[SHADOW_AI])
+
+    def test_naps_teddiursa_trainer_is_the_tutorial_shadow(self) -> None:
+        data = Path(iso_patcher.__file__).resolve().parent.parent / "data"
+        trainers = {t["index"]: t for t in json.loads((data / "deckdata_story_trainers.json").read_text())}
+        shadows = {d["ddpk_index"]: d for d in json.loads((data / "deckdata_dark_pokemon.json").read_text())}
+        team = trainers[iso_patcher.NAPS_TEDDIURSA_TRAINER]["team"]
+        self.assertEqual(["DDPK"], [slot["kind"] for slot in team])
+        self.assertEqual(216, shadows[team[0]["ddpk_index"]]["species"])  # Teddiursa

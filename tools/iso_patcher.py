@@ -3289,6 +3289,7 @@ def write_nightmare_citadark_patch(output_path: Path, teams: "dict[int, dict]",
 
 GREEVIL_AI_INDEX = 200  # Better AI's row for trainers without shadow Pokemon
 GREEVIL_SHADOW_AI_INDEX = 201  # and for trainers with at least one
+NAPS_TEDDIURSA_TRAINER = 17  # Naps #1, the shadow Teddiursa tutorial fight: keeps its vanilla AI
 
 def _vanilla_ai_index_by_trainer() -> "dict[int, int]":
     """{trainer index: vanilla AI row} from the shipped `deckdata_story_trainers.json`; empty when it cannot be
@@ -3352,7 +3353,9 @@ def apply_better_ai_edit(story_decompressed: bytes, vanilla_ai: "dict[int, int]"
 
 def write_better_ai_patch(output_path: Path, skip: "set[int] | frozenset[int]" = frozenset()) -> dict:
     """`apply_better_ai_edit` on the disc's DeckData_Story.bin, every trainer in the shipped extraction pointed at
-    `GREEVIL_AI_INDEX`, or `GREEVIL_SHADOW_AI_INDEX` if it has a shadow Pokemon. Runs after Nightmare Citadark; `skip` is its replaced trainers."""
+    `GREEVIL_AI_INDEX`, or `GREEVIL_SHADOW_AI_INDEX` if it has a shadow Pokemon. Runs after Nightmare Citadark;
+    `skip` is its replaced trainers, plus `NAPS_TEDDIURSA_TRAINER` always."""
+    skip = set(skip) | {NAPS_TEDDIURSA_TRAINER}
     result = {"applied": False, "reason": None, "trainers": 0}
     output_path = Path(output_path).resolve()
     try:
