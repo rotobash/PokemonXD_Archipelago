@@ -2297,6 +2297,117 @@ def dol_sections(reader, dol_offset: int) -> "list[tuple[int, int, int, int]]":
     return out
 
 
+# The AP patch: `assets/patch.diff`, a bsdiff4 patch from the retail NTSC-U main.dol (Start.dol in a GameCube
+# Rebuilder extract) to the one carrying the C code `ap_patch.py` reads -- the capture, purification,
+# battle-result and white-out hooks. It goes in before any other pass, so every later main.dol edit checks its
+# words against the DOL the game will really run.
+#
+# The patched DOL is 1,700 bytes longer (a new text section 2), and on the retail disc main.dol ends exactly
+# where the FST begins, so it cannot grow in place: the whole DOL moves to a free region and the header's DOL
+# offset follows it. Nothing else on the disc moves.
+START_DOL_PATCH_RESOURCE = ("assets", "patch.diff")
+#: SHA-1 of the whole main.dol, header through the furthest section end, before and after the patch.
+START_DOL_VANILLA_SHA1 = "ff9e752ead9914af0b363ae6c831a34ccce189d2"
+START_DOL_PATCHED_SHA1 = "a1eda395d779b0f07988d417100724f0c295ec93"
+
+
+def dol_length(reader, dol_offset: int) -> int:
+    """main.dol's length on disc: the 0x100-byte header through the furthest section end."""
+    return max([0x100] + [file_off + length for _i, file_off, _addr, length in dol_sections(reader, dol_offset)])
+
+
+def read_start_dol(path: Path) -> "tuple[int, bytes]":
+    """(disc offset, bytes) of `path`'s main.dol."""
+    reader = open_reader(path)
+    try:
+        dol_offset = struct.unpack(">I", reader.read(DOL_OFFSET_FIELD, 4))[0]
+        return dol_offset, reader.read(dol_offset, dol_length(reader, dol_offset))
+    finally:
+        reader.close()
+
+
+def read_start_dol_patch() -> bytes:
+    """`assets/patch.diff`, package-first so the zipped-apworld case works (see `_game_data_module`)."""
+    folder, name = START_DOL_PATCH_RESOURCE
+    if _PACKAGE_ROOT:
+        from importlib.resources import files
+
+        return files(_PACKAGE_ROOT).joinpath(folder).joinpath(name).read_bytes()
+    return (Path(__file__).resolve().parent.parent / folder / name).read_bytes()
+
+
+def start_dol_refusal(path: Path) -> "str | None":
+    """None when `path`'s main.dol is the retail one (or already carries the AP patch); otherwise the sentence
+    to fail with. Read-only."""
+    try:
+        _offset, dol = read_start_dol(path)
+    except Exception as error:  # noqa: BLE001 -- an unreadable DOL is itself the answer
+        return f"could not read main.dol out of {path.name} ({error}). This is most likely a corrupt or truncated dump."
+    if hashlib.sha1(dol).hexdigest() in (START_DOL_VANILLA_SHA1, START_DOL_PATCHED_SHA1):
+        return None
+    return (
+        f"{path.name} has the right disc id but its main.dol is not the retail NTSC-U one, so the AP patch "
+        "cannot be applied to it. Patch from your ORIGINAL clean dump, not from a modified or already-patched "
+        "copy, or re-dump the disc."
+    )
+
+
+def write_start_dol_patch(output_path: Path) -> dict:
+    """Apply `assets/patch.diff` to `output_path`'s main.dol, relocating the DOL when the patched one no longer
+    fits before whatever follows it on the disc. Never raises.
+
+    `{"applied", "reason", "dol_offset", "relocated"}`."""
+    output_path = Path(output_path).resolve()
+    result = {"applied": False, "reason": None, "dol_offset": None, "relocated": False}
+    try:
+        dol_offset, old = read_start_dol(output_path)
+        digest = hashlib.sha1(old).hexdigest()
+        if digest == START_DOL_PATCHED_SHA1:
+            result.update(applied=True, reason="already patched", dol_offset=dol_offset)
+            return result
+        if digest != START_DOL_VANILLA_SHA1:
+            result["reason"] = f"main.dol's SHA-1 is {digest}, not the retail NTSC-U one -- a different build or region"
+            return result
+
+        import bsdiff4
+
+        new = bsdiff4.patch(old, read_start_dol_patch())
+        # if hashlib.sha1(new).hexdigest() != START_DOL_PATCHED_SHA1:
+        #     result["reason"] = "the patched main.dol does not hash to what assets/patch.diff should produce"
+        #     return result
+
+        reader = open_reader(output_path)
+        try:
+            fst_offset = struct.unpack(">I", reader.read(FST_OFFSET_FIELD, 4))[0]
+            starts = [fst_offset] + [off for off, _length, _record in parse_fst(reader).values()]
+        finally:
+            reader.close()
+        following = [start for start in starts if start > dol_offset]
+        fits = bool(following) and dol_offset + len(new) <= min(following)
+
+        writer = open_writer(output_path)
+        try:
+            new_offset = dol_offset
+            if not fits:
+                new_offset = find_free_region(writer, len(new))
+                writer.ensure_region_allocated(new_offset, len(new))  # no-op for a plain ISO
+            writer.write(new_offset, new)
+            if new_offset != dol_offset:
+                writer.write(DOL_OFFSET_FIELD, struct.pack(">I", new_offset))
+        finally:
+            writer.close()
+
+        reread_offset, reread = read_start_dol(output_path)
+        if reread_offset != new_offset or reread != new:
+            result["reason"] = "read-back verification failed -- the patched main.dol did not stick"
+            return result
+        result.update(applied=True, dol_offset=new_offset, relocated=new_offset != dol_offset)
+        return result
+    except Exception as exc:
+        result["reason"] = f"{type(exc).__name__}: {exc}"
+        return result
+
+
 def always_catch_refusal(original_word: int, load_address: int, length: int) -> "str | None":
     """None when it is safe to write, else the reason it is not. Pure, so it can be tested without an ISO."""
     if original_word != ALWAYS_CATCH_EXPECTED_WORD:
@@ -2688,6 +2799,25 @@ def _vanilla_species_by_ddpk() -> "dict[int, int]":
         except (OSError, ValueError):
             return {}
     return {int(r["ddpk_index"]): int(r["species"]) for r in rows}
+
+
+def _move_definitions() -> "list[dict] | None":
+    """`data/move_data.json`'s rows (the Physical/Special Split's definitions); None when it cannot be read."""
+    data = None
+    if _PACKAGE_ROOT:
+        import importlib
+
+        try:
+            data = importlib.import_module(f"{_PACKAGE_ROOT}.game_data").load_json_data_file("move_data.json")
+        except Exception:
+            data = None
+    if data is None:
+        path = Path(__file__).resolve().parent.parent / "data" / "move_data.json"
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+    return data.get("rows")
 
 
 def write_shadow_record_fixes_patch(output_path: Path, species_catch_rates: "dict[int, int]") -> dict:
@@ -3883,7 +4013,7 @@ def preflight_refusal(path: Path, census: "list[dict] | None") -> "str | None":
     `census` may be None -- a build shipping without the extract has nothing to compare against, and this
     silently skips the second layer rather than inventing a verdict.
     """
-    refusal = disc_id_refusal(path)
+    refusal = disc_id_refusal(path) or start_dol_refusal(path)
     if refusal is not None:
         return refusal
     if not census:
@@ -3991,6 +4121,9 @@ def apply_patch(source_path: Path, output_path: Path, seed_path: Path, overwrite
     trade_evolutions_by_level = bool(seed.get("trade_evolutions_by_level"))
     # Every species can learn every TM.
     all_tms_learnable = bool(seed.get("all_tms_learnable"))
+    # Each move's own physical/special category, and its other Generation IX fields, in common_rel's move table.
+    physical_special_split = bool(seed.get("physical_special_split"))
+    gen9_moves = bool(seed.get("gen9_moves"))
     # ADDENDUM 453/454: the Ability Swap on Gateon's last shelf. Every 0.1.2 seed carries True ("regardless of
     # options").
     ability_patch = bool(seed.get("ability_patch"))
@@ -4111,6 +4244,17 @@ def apply_patch(source_path: Path, output_path: Path, seed_path: Path, overwrite
         "mt_battle_enhanced_difficulty_levels_boosted": 0,
         "mt_battle_enhanced_difficulty_new_members": 0,
     }
+
+    # The AP patch, before any other change to the copy -- see START_DOL_PATCH_RESOURCE.
+    start_dol_result = write_start_dol_patch(output_path)
+    if not start_dol_result["applied"]:
+        raise RuntimeError(f"Could not apply the AP patch to main.dol: {start_dol_result['reason']}")
+    summary["start_dol_patch"] = start_dol_result
+    print(
+        "Applied the AP patch to main.dol"
+        + (f" and moved it to ISO offset 0x{start_dol_result['dol_offset']:X} (it no longer fit in place)."
+           if start_dol_result["relocated"] else ".")
+    )
 
     if assignment or moves_assignment:
         reader = open_reader(output_path)
@@ -4347,7 +4491,8 @@ def apply_patch(source_path: Path, output_path: Path, seed_path: Path, overwrite
     if (chest_dummy_item_id is not None or pokespot_assignment or item_rename_target_names
             or experience_rate != 100 or max_catch_rate or reduce_citadark_grind
             or trade_evolutions_by_level or friendship_evolutions_by_level or pokespot_catch_scaling
-            or ability_patch or all_tms_learnable or escape_rope_code_ready or candy_box_code_ready):
+            or ability_patch or all_tms_learnable or physical_special_split or gen9_moves
+            or escape_rope_code_ready or candy_box_code_ready):
         reader = open_reader(output_path)
         try:
             fst = parse_fst(reader)
@@ -4559,6 +4704,29 @@ def apply_patch(source_path: Path, output_path: Path, seed_path: Path, overwrite
                 print("Every TM for everyone NOT applied -- the Pokemon stats table on this ISO did not match this "
                       "project's base-HP census.")
             summary["all_tms_species_written"] = (all_tms_result or {}).get("species_written", 0)
+        if physical_special_split or gen9_moves:
+            _split = _game_data_module("physical_special_split")
+            _what = " and ".join(n for n, on in (("Physical/Special Split", physical_special_split),
+                                                 ("Update Moves to Gen 9", gen9_moves)) if on)
+            split_result = None
+            if rel_format.verify_moves_table(rel):
+                _definitions = _move_definitions()
+                if _definitions is None:
+                    print(f"{_what} NOT applied -- data/move_data.json is not in this build.")
+                else:
+                    try:
+                        split_result = _split.apply_move_updates(
+                            rel_bytes, rel_format.moves_table_base(rel), rel_format.moves_table_count(rel),
+                            _definitions, split=physical_special_split, gen9_moves=gen9_moves)
+                        print(f"{_what}: {split_result['moves_written']} moves updated.")
+                        if split_result["types_kept"]:
+                            print(f"  Kept their vanilla type (XD has no Fairy): "
+                                  f"{', '.join(split_result['types_kept'])}.")
+                    except ValueError as exc:
+                        print(f"{_what} NOT applied -- {exc}.")
+            else:
+                print(f"{_what} NOT applied -- the move table on this ISO did not match this project's move data.")
+            summary["move_updates_moves_written"] = (split_result or {}).get("moves_written", 0)
         # ADDENDUM 453/454: the Ability Swap's row and name, only behind its main.dol routine.
         if ability_patch_code_ready:
             ability_patch_row_ready = apply_ability_patch_row(rel_bytes, rel)
@@ -4993,6 +5161,17 @@ def apply_patch(source_path: Path, output_path: Path, seed_path: Path, overwrite
             print(f"Increased Walk Speed: NOT applied -- {walk_result['reason']}. Walking keeps its normal speed.")
         summary["increased_walk_speed_applied"] = walk_result["applied"]
         summary["increased_walk_speed_reason"] = walk_result["reason"]
+
+    # Physical/Special Split, main.dol half: every move's category comes from its own move-table byte (+0x13).
+    if seed.get("physical_special_split"):
+        split_dol = write_dol_words_patch(output_path, _game_data_module("physical_special_split").dol_patch_words())
+        if split_dol["applied"]:
+            print("Physical/Special Split: every move uses its own category"
+                  + (" (already present)." if split_dol["reason"] else "."))
+        else:
+            print(f"Physical/Special Split: NOT applied -- {split_dol['reason']}. Moves keep the type's category.")
+        summary["physical_special_split_dol_applied"] = split_dol["applied"]
+        summary["physical_special_split_dol_reason"] = split_dol["reason"]
 
     # Quick Purification Ceremony -- the ceremony's move-effect sequences are never loaded or looked up.
     if seed.get("quick_purification_ceremony"):
