@@ -99,6 +99,18 @@ class PurificationProgressionCap(Range):
     default = 30
 
 
+class PurificationUnlocks(Toggle):
+    """
+    Adds a "Purify Unlock - {species}" item for every Shadow Pokemon in your seed. A Shadow's heart stays
+    closed -- it can be snagged and used, but never purified -- until its unlock is received.
+
+    With "Purification Checks" on, the unlocks behind the checks that can hold progression are progression
+    items themselves; the rest are useful.
+    """
+
+    display_name = "Purification Unlocks"
+
+
 class TrainerDefeatCheckCount(Range):
     """
     Only meaningful when Shuffle Trainer Defeats is on with setting Cumulative. Defaults to 100.
@@ -943,6 +955,23 @@ class ShadowMoveTMs(Range):
     default = 0
 
 
+class PhysicalSpecialSplit(Toggle):
+    """
+    Each move is physical or special on its own, as in later generations, instead of by its type.
+    """
+
+    display_name = "Physical/Special Split"
+
+
+class UpdateMovesToGen9(Toggle):
+    """
+    Moves have the power, accuracy, PP, priority and type they have in Generation IX. (Moves that are Fairy type
+    there keep their own type.)
+    """
+
+    display_name = "Update Moves to Gen 9"
+
+
 @dataclass
 class PokemonXDOptions(PerGameCommonOptions):
     # ORDER MATTERS: Options.generate_yaml_templates emits the template in exactly this order (group by group,
@@ -977,6 +1006,7 @@ class PokemonXDOptions(PerGameCommonOptions):
     # -- Shadow Pokemon --
     purification_checks: PurificationChecks
     purification_progression_cap: PurificationProgressionCap
+    purification_unlocks: PurificationUnlocks
     shadow_pokemon_expansion: ShadowPokemonExpansion
     missable_trainer_shadows: MissableTrainerShadows
     kaminko_missable_trainers: KaminkoMissableTrainers
@@ -1011,6 +1041,8 @@ class PokemonXDOptions(PerGameCommonOptions):
     start_with_poke_spots: StartWithPokeSpots
     all_pokemon_learn_all_tms: AllPokemonLearnAllTMs
     shadow_move_tms: ShadowMoveTMs
+    physical_special_split: PhysicalSpecialSplit
+    update_moves_to_gen_9: UpdateMovesToGen9
 
     # -- Speed --
     text_speed: TextSpeed
@@ -1069,6 +1101,7 @@ OPTION_GROUPS: "list[OptionGroup]" = [
     OptionGroup("Shadow Pokemon", [
         PurificationChecks,
         PurificationProgressionCap,
+        PurificationUnlocks,
         ShadowPokemonExpansion,
         MissableTrainerShadows,
         KaminkoMissableTrainers,
@@ -1103,6 +1136,8 @@ OPTION_GROUPS: "list[OptionGroup]" = [
         StartWithPokeSpots,
         AllPokemonLearnAllTMs,
         ShadowMoveTMs,
+        PhysicalSpecialSplit,
+        UpdateMovesToGen9,
     ]),
     OptionGroup("Speed", [
         TextSpeed,
