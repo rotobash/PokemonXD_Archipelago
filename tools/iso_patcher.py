@@ -3287,7 +3287,8 @@ def write_nightmare_citadark_patch(output_path: Path, teams: "dict[int, dict]",
     result["shadows_relocated"] = len(levels)
     return {**result, "grew": patch_result["grew"]}
 
-GREEVIL_AI_INDEX = 200
+GREEVIL_AI_INDEX = 200  # Better AI's row for trainers without shadow Pokemon
+GREEVIL_SHADOW_AI_INDEX = 201  # and for trainers with at least one
 
 def _vanilla_ai_index_by_trainer() -> "dict[int, int]":
     """{trainer index: vanilla AI row} from the shipped `deckdata_story_trainers.json`; empty when it cannot be
@@ -3311,41 +3312,47 @@ def _vanilla_ai_index_by_trainer() -> "dict[int, int]":
 
 
 def apply_better_ai_edit(story_decompressed: bytes, vanilla_ai: "dict[int, int]", ai_index: int,
-                         skip: "set[int] | frozenset[int]" = frozenset()) -> "tuple[bytes, list[int]]":
-    """Point each trainer in `vanilla_ai` (not in `skip`) at DTAI row `ai_index`, DTNR +0x28. Refuses, writing
-    nothing, when the row is past the table or a trainer's AI row is neither its vanilla one nor `ai_index` -- a
-    different game version. Returns (new DeckData_Story.bin, the trainers changed)."""
+                         shadow_ai_index: int, skip: "set[int] | frozenset[int]" = frozenset()
+                         ) -> "tuple[bytes, list[int]]":
+    """Point each trainer in `vanilla_ai` (not in `skip`) at DTAI row `ai_index`, DTNR +0x28 -- or
+    `shadow_ai_index` when its team on this disc has a shadow (DDPK) slot. Refuses, writing nothing, when a row is
+    past the table or a trainer's AI row is neither its vanilla one nor its new one -- a different game version.
+    Returns (new DeckData_Story.bin, the trainers changed)."""
     DTNR_AI_INDEX_OFF = 0x28
     deck = deck_format.DeckFile(story_decompressed)
-    if not 0 <= ai_index < deck.dtai_entries:
-        raise ValueError(f"Better AI: AI row {ai_index} is past the table ({deck.dtai_entries} rows)")
+    for row in (ai_index, shadow_ai_index):
+        if not 0 <= row < deck.dtai_entries:
+            raise ValueError(f"Better AI: AI row {row} is past the table ({deck.dtai_entries} rows)")
     buf = bytearray(story_decompressed)
-    changed = []
+    changed = {}
     for trainer_index, vanilla in sorted(vanilla_ai.items()):
         if trainer_index in skip:
             continue
         if not 0 < trainer_index < deck.dtnr_entries:
             raise ValueError(f"Better AI: trainer {trainer_index} is not on this ISO")
+        trainer = deck.trainer(trainer_index)
+        has_shadow = trainer is not None and any(slot["kind"] == "DDPK" for slot in trainer["team"])
+        target = shadow_ai_index if has_shadow else ai_index
         base = deck.dtnr_data + trainer_index * 0x38
         current = struct.unpack_from(">H", buf, base + DTNR_AI_INDEX_OFF)[0]
-        if current == ai_index:
+        if current == target:
             continue
         if current != vanilla:
             raise ValueError(f"Better AI: trainer {trainer_index} has AI row {current} on this ISO, not the "
                              f"expected {vanilla} -- a different game version")
-        struct.pack_into(">H", buf, base + DTNR_AI_INDEX_OFF, ai_index)
-        changed.append(trainer_index)
+        struct.pack_into(">H", buf, base + DTNR_AI_INDEX_OFF, target)
+        changed[trainer_index] = target
     out = bytes(buf)
     check = deck_format.DeckFile(out)
-    for trainer_index in changed:
-        if check.trainer(trainer_index)["ai_index"] != ai_index:
+    for trainer_index, target in changed.items():
+        if check.trainer(trainer_index)["ai_index"] != target:
             raise ValueError(f"Better AI: trainer {trainer_index}'s AI row did not read back as written")
-    return out, changed
+    return out, list(changed)
 
 
 def write_better_ai_patch(output_path: Path, skip: "set[int] | frozenset[int]" = frozenset()) -> dict:
     """`apply_better_ai_edit` on the disc's DeckData_Story.bin, every trainer in the shipped extraction pointed at
-    `tools.iso_patcher.GREEVIL_AI_INDEX`. Runs after Nightmare Citadark; `skip` is its replaced trainers."""
+    `GREEVIL_AI_INDEX`, or `GREEVIL_SHADOW_AI_INDEX` if it has a shadow Pokemon. Runs after Nightmare Citadark; `skip` is its replaced trainers."""
     result = {"applied": False, "reason": None, "trainers": 0}
     output_path = Path(output_path).resolve()
     try:
@@ -3366,7 +3373,7 @@ def write_better_ai_patch(output_path: Path, skip: "set[int] | frozenset[int]" =
         finally:
             reader.close()
         new_story, changed = apply_better_ai_edit(
-            deck_format.lzss_decode(story_raw), vanilla_ai, GREEVIL_AI_INDEX, skip)
+            deck_format.lzss_decode(story_raw), vanilla_ai, GREEVIL_AI_INDEX, GREEVIL_SHADOW_AI_INDEX, skip)
         if not changed:
             result.update(applied=True, reason="already patched")
             return result
@@ -4253,7 +4260,8 @@ def apply_patch(source_path: Path, output_path: Path, seed_path: Path, overwrite
         summary["better_ai_applied"] = better_ai_result["applied"]
         summary["better_ai_reason"] = better_ai_result["reason"]
         summary["better_ai_trainers"] = better_ai_result["trainers"]
-        print(f"Better AI: {better_ai_result['trainers']} trainer(s) now use trainer 200's AI"
+        print(f"Better AI: {better_ai_result['trainers']} trainer(s) now use AI row {GREEVIL_AI_INDEX}"
+              f" ({GREEVIL_SHADOW_AI_INDEX} with shadows)"
               + (" (already present)." if better_ai_result["reason"] else ".")
               if better_ai_result["applied"] else f"Better AI: NOT patched -- {better_ai_result['reason']}.")
 
