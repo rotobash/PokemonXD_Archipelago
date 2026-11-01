@@ -475,6 +475,14 @@ class CitadarkAdminsOnly(Toggle):
     display_name = "Citadark Admins Only"
 
 
+class BetterAI(Toggle):
+    """
+    Trainers battle smarter.
+    """
+
+    display_name = "Better AI"
+
+
 class RemoveCitadarkShadows(Toggle):
     """
     No Citadark Isle trainer except Greevil has a Shadow Pokemon. Each of those Shadow Pokemon moves to a
@@ -1019,6 +1027,7 @@ class PokemonXDOptions(PerGameCommonOptions):
     nightmare_citadark: NightmareCitadark
     nightmare_greevil: NightmareGreevil
     citadark_admins_only: CitadarkAdminsOnly
+    better_ai: BetterAI
 
     # -- Your Pokemon --
     randomize_starter: RandomizeStarter
@@ -1113,6 +1122,7 @@ OPTION_GROUPS: "list[OptionGroup]" = [
         NightmareCitadark,
         NightmareGreevil,
         CitadarkAdminsOnly,
+        BetterAI,
     ]),
     OptionGroup("Your Pokemon", [
         RandomizeStarter,
